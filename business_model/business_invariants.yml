@@ -1,0 +1,277 @@
+invariants:
+  INV-PAY-ORDER-001:
+    name: paid_order_has_successful_payment
+    journey: payment
+    entity: order
+    services: [ts-order-service, ts-payment-service, ts-inside-payment-service]
+    observation_sources: [sql_join, order_read_probe, payment_consistency_probe]
+    business_slis: [payment_consistency_success_rate, order_read_success_rate]
+    default_field: status
+    example_bad_value: PAID_WITHOUT_PAYMENT
+    expected_impacts: [order_payment_consistency_violation]
+    downstream_services: [ts-payment-service, ts-inside-payment-service]
+    production_scenario: payment callback marks an order paid before payment state is committed
+  INV-PAY-AMOUNT-002:
+    name: payment_amount_matches_order_amount
+    journey: payment
+    entity: payment
+    services: [ts-payment-service, ts-order-service]
+    observation_sources: [sql_join, payment_consistency_probe]
+    business_slis: [payment_consistency_success_rate]
+    default_field: amount
+    example_bad_value: 0
+    expected_impacts: [payment_amount_drift]
+    downstream_services: [ts-order-service]
+    production_scenario: amount conversion drift causes payment amount to differ from order price
+  INV-PRICE-ORDER-003:
+    name: order_price_matches_configured_price
+    journey: ticket_booking
+    entity: order
+    services: [ts-order-service, ts-price-service, ts-basic-service]
+    observation_sources: [sql_join, booking_precheck_probe]
+    business_slis: [booking_precheck_success_rate]
+    default_field: price
+    example_bad_value: -1
+    expected_impacts: [order_price_configuration_violation]
+    downstream_services: [ts-price-service]
+    production_scenario: stale price configuration produces an order with inconsistent ticket price
+  INV-BOOK-INV-004:
+    name: successful_booking_reduces_inventory
+    journey: ticket_booking
+    entity: ticket_inventory
+    services: [ts-preserve-service, ts-seat-service, ts-order-service]
+    observation_sources: [inventory_sql_check, booking_precheck_probe]
+    business_slis: [ticket_inventory_consistency_success_rate, booking_precheck_success_rate]
+    default_field: remaining_seats
+    example_bad_value: UNCHANGED_AFTER_BOOKING
+    expected_impacts: [inventory_reservation_mismatch]
+    downstream_services: [ts-seat-service]
+    production_scenario: order creation succeeds but seat inventory is not decremented
+  INV-CANCEL-INV-005:
+    name: cancelled_order_releases_inventory
+    journey: order_cancel_rebook
+    entity: ticket_inventory
+    services: [ts-cancel-service, ts-seat-service, ts-order-service]
+    observation_sources: [inventory_sql_check, cancel_journey_probe]
+    business_slis: [ticket_inventory_consistency_success_rate]
+    default_field: remaining_seats
+    example_bad_value: NOT_RELEASED
+    expected_impacts: [cancel_release_mismatch]
+    downstream_services: [ts-seat-service]
+    production_scenario: cancellation changes order state but fails to release preserved ticket inventory
+  INV-CONTACT-OWN-006:
+    name: passenger_contact_belongs_to_ordering_user
+    journey: authentication_user_context
+    entity: contact
+    services: [ts-contacts-service, ts-preserve-service]
+    observation_sources: [contact_owner_probe, sql_lookup]
+    business_slis: [contacts_fetch_success_rate, booking_precheck_success_rate]
+    default_field: account_id
+    example_bad_value: OTHER_USER
+    expected_impacts: [passenger_ownership_violation]
+    downstream_services: [ts-preserve-service]
+    production_scenario: booking uses a passenger contact owned by another account
+  INV-TRIP-REF-007:
+    name: trip_references_valid_route_station_train
+    journey: trip_search
+    entity: trip
+    services: [ts-travel-service, ts-route-service, ts-station-service, ts-train-service]
+    observation_sources: [trip_search_probe, topology_lookup]
+    business_slis: [trip_search_success_rate]
+    default_field: route_id
+    example_bad_value: MISSING_ROUTE
+    expected_impacts: [invalid_trip_reference]
+    downstream_services: [ts-route-service, ts-station-service]
+    production_scenario: trip catalog references a route or station that no longer exists
+  INV-ORDER-STATE-008:
+    name: order_state_transitions_are_legal
+    journey: order_cancel_rebook
+    entity: order
+    services: [ts-order-service, ts-cancel-service, ts-rebook-service]
+    observation_sources: [order_state_machine_check, order_read_probe]
+    business_slis: [order_read_success_rate]
+    default_field: status
+    example_bad_value: CANCELLED_TO_PAID
+    expected_impacts: [illegal_order_state_transition]
+    downstream_services: [ts-cancel-service, ts-rebook-service]
+    production_scenario: retry or compensation path moves an order through an impossible state transition
+  INV-PAY-EXIST-009:
+    name: payment_cannot_succeed_for_nonexistent_order
+    journey: payment
+    entity: payment
+    services: [ts-payment-service, ts-order-service]
+    observation_sources: [sql_join, payment_consistency_probe]
+    business_slis: [payment_consistency_success_rate]
+    default_field: order_id
+    example_bad_value: NONEXISTENT_ORDER
+    expected_impacts: [orphan_successful_payment]
+    downstream_services: [ts-order-service]
+    production_scenario: payment service accepts success callback after the order record was deleted or rolled back
+  INV-REBOOK-TRACE-010:
+    name: rebooked_order_preserves_original_traceability
+    journey: order_cancel_rebook
+    entity: order
+    services: [ts-rebook-service, ts-order-service]
+    observation_sources: [order_trace_sql_check, order_read_probe]
+    business_slis: [order_read_success_rate]
+    default_field: original_order_id
+    example_bad_value: NULL
+    expected_impacts: [lost_rebook_traceability]
+    downstream_services: [ts-order-service]
+    production_scenario: rebook flow creates a replacement order without original-order linkage
+  INV-ADDON-ORDER-011:
+    name: addon_order_references_valid_ticket_order
+    journey: optional_addons
+    entity: food_order
+    services: [ts-food-delivery-service, ts-order-service, ts-assurance-service, ts-consign-service]
+    observation_sources: [addon_sql_join, order_read_probe]
+    business_slis: [order_read_success_rate]
+    default_field: order_id
+    example_bad_value: NONEXISTENT_ORDER
+    expected_impacts: [orphan_addon_order]
+    downstream_services: [ts-order-service]
+    production_scenario: optional addon is committed after the parent ticket order fails
+  INV-PRESERVE-BYPASS-012:
+    name: preserve_booking_validation_not_bypassed
+    journey: ticket_booking
+    entity: order
+    services: [ts-preserve-service, ts-order-service, ts-contacts-service]
+    observation_sources: [sql_check, booking_precheck_probe]
+    business_slis: [booking_precheck_success_rate, order_read_success_rate]
+    default_field: contacts_name
+    example_bad_value: ''
+    expected_impacts: [preserve_validation_bypass, passenger_info_inconsistency]
+    downstream_services: [ts-order-service]
+    production_scenario: booking precheck validation is bypassed, allowing empty passenger name or document
+  INV-SEAT-UNIQUE-013:
+    name: no_two_active_orders_share_same_seat
+    journey: ticket_booking
+    entity: seat
+    services: [ts-seat-service, ts-preserve-service, ts-order-service]
+    observation_sources: [sql_check, booking_precheck_probe]
+    business_slis: [booking_precheck_success_rate, seat_uniqueness]
+    default_field: seat_number
+    example_bad_value: DUPLICATE_SEAT_CONFLICT
+    expected_impacts: [seat_allocation_conflict, seat_uniqueness_violation]
+    downstream_services: [ts-preserve-service]
+    production_scenario: concurrency window allows two bookings to allocate the same seat
+  INV-NOTIFY-ORDER-014:
+    name: notification_must_reference_valid_order
+    journey: notification
+    entity: notification
+    services: [ts-notification-service, ts-order-service]
+    observation_sources: [sql_join, order_read_probe]
+    business_slis: [order_read_success_rate]
+    default_field: order_number
+    example_bad_value: NONEXISTENT_ORDER
+    expected_impacts: [orphan_notification_order]
+    downstream_services: [ts-order-service]
+    production_scenario: notification is queued for a ticket order that was deleted or never committed
+  INV-CONFIG-DRIFT-015:
+    name: config_values_stay_in_expected_range
+    journey: admin_manage
+    entity: config
+    services: [ts-config-service, ts-travel-service, ts-price-service]
+    observation_sources: [sql_check, config_probe]
+    business_slis: [config_consistency_rate]
+    default_field: value
+    example_bad_value: 0.0
+    expected_impacts: [config_value_drift, stale_business_configuration]
+    downstream_services: [ts-travel-service, ts-price-service]
+    production_scenario: config value drifted outside (0,1) range during sync window
+  INV-SECURITY-BYPASS-016:
+    name: security_rate_limit_thresholds_must_be_positive
+    journey: security
+    entity: config
+    services: [ts-security-service, ts-preserve-service]
+    observation_sources: [sql_check]
+    business_slis: [booking_precheck_success_rate]
+    default_field: value
+    example_bad_value: 0
+    expected_impacts: [security_threshold_bypass, rate_limit_disabled]
+    downstream_services: [ts-preserve-service]
+    production_scenario: rate limit threshold zeroed by stale config push or manual error
+  INV-VOUCHER-ORDER-017:
+    name: voucher_must_reference_valid_order
+    journey: voucher
+    entity: order
+    services: [ts-voucher-service, ts-order-service]
+    observation_sources: [sql_join, order_read_probe]
+    business_slis: [order_read_success_rate]
+    default_field: order_id
+    example_bad_value: NONEXISTENT_ORDER
+    expected_impacts: [orphan_voucher_order]
+    downstream_services: [ts-order-service]
+    production_scenario: voucher is issued for an order that was deleted or never committed
+  INV-WAIT-STATE-021:
+    name: wait_order_state_transitions_are_legal
+    journey: wait_order
+    entity: wait_order
+    services: [ts-wait-order-service]
+    observation_sources: [sql_check]
+    business_slis: [order_read_success_rate]
+    default_field: status
+    example_bad_value: COLLECTED_WITHOUT_PAID
+    expected_impacts: [illegal_wait_order_state_transition]
+    downstream_services: []
+    production_scenario: wait-list order skips PAID state and goes directly to COLLECTED or REFUNDS
+  INV-FOOD-ORDER-022:
+    name: food_order_price_positive_and_delivery_ref_valid
+    journey: booking_with_food
+    entity: food_order
+    services: [ts-food-service, ts-food-delivery-service, ts-order-service]
+    observation_sources: [sql_check]
+    business_slis: [order_read_success_rate]
+    default_field: price
+    example_bad_value: 0
+    expected_impacts: [food_order_price_drift, food_delivery_orphan]
+    downstream_services: [ts-travel-service]
+    production_scenario: food order price zeroed or food delivery references nonexistent trip
+  INV-CONSIGN-PRICE-023:
+    name: consign_price_and_weight_must_be_positive
+    journey: consign
+    entity: consign_record
+    services: [ts-consign-service, ts-consign-price-service]
+    observation_sources: [sql_check]
+    business_slis: [booking_precheck_success_rate]
+    default_field: consign_record_price
+    example_bad_value: 0
+    expected_impacts: [consign_price_drift, consign_weight_drift]
+    downstream_services: [ts-consign-price-service]
+    production_scenario: consign record price or weight corrupted during bulk update
+  INV-DELIVERY-ORDER-018:
+    name: delivery_record_must_reference_valid_order
+    journey: delivery
+    entity: food_order
+    services: [ts-delivery-service, ts-order-service]
+    observation_sources: [sql_join, order_read_probe]
+    business_slis: [order_read_success_rate]
+    default_field: order_id
+    example_bad_value: NONEXISTENT_ORDER
+    expected_impacts: [orphan_delivery_order]
+    downstream_services: [ts-order-service]
+    production_scenario: food delivery record persists after parent order cancellation
+  INV-TRAIN-TYPE-019:
+    name: train_type_capacity_and_speed_must_be_positive
+    journey: route_planning
+    entity: train
+    services: [ts-train-service, ts-travel-service, ts-basic-service]
+    observation_sources: [sql_check, trip_search_probe]
+    business_slis: [trip_search_success_rate]
+    default_field: economy_class
+    example_bad_value: 0
+    expected_impacts: [train_type_config_drift, stale_business_configuration]
+    downstream_services: [ts-travel-service, ts-basic-service]
+    production_scenario: train type configuration corrupted during bulk admin update
+  INV-INSIDE-PAY-020:
+    name: inside_payment_amount_and_balance_must_be_valid
+    journey: payment
+    entity: payment
+    services: [ts-inside-payment-service, ts-order-service]
+    observation_sources: [sql_check, payment_consistency_probe]
+    business_slis: [payment_consistency_success_rate]
+    default_field: price
+    example_bad_value: -1
+    expected_impacts: [inside_payment_drift, wallet_balance_corruption]
+    downstream_services: [ts-order-service, ts-payment-service]
+    production_scenario: inside-payment price diverges from order amount during async sync

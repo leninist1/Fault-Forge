@@ -1,0 +1,764 @@
+# Train-Ticket Microservice Topology
+# Defines all service-to-service call relationships, dependencies, and infrastructure bindings.
+
+infrastructure:
+  mysql_instances:
+    - name: ts-auth-mysql
+      services: [ts-auth-service]
+      port: 3306
+    - name: ts-user-mysql
+      services: [ts-user-service]
+      port: 3306
+    - name: ts-contacts-mysql
+      services: [ts-contacts-service]
+      port: 3306
+    - name: ts-order-mysql
+      services: [ts-order-service]
+      port: 3306
+    - name: ts-order-other-mysql
+      services: [ts-order-other-service]
+      port: 3306
+    - name: ts-config-mysql
+      services: [ts-config-service]
+      port: 3306
+    - name: ts-station-mysql
+      services: [ts-station-service]
+      port: 3306
+    - name: ts-train-mysql
+      services: [ts-train-service]
+      port: 3306
+    - name: ts-travel-mysql
+      services: [ts-travel-service]
+      port: 3306
+    - name: ts-travel2-mysql
+      services: [ts-travel2-service]
+      port: 3306
+    - name: ts-price-mysql
+      services: [ts-price-service]
+      port: 3306
+    - name: ts-notification-mysql
+      services: [ts-notification-service]
+      port: 3306
+    - name: ts-security-mysql
+      services: [ts-security-service]
+      port: 3306
+    - name: ts-inside-payment-mysql
+      services: [ts-inside-payment-service]
+      port: 3306
+    - name: ts-payment-mysql
+      services: [ts-payment-service]
+      port: 3306
+    - name: ts-rebook-mysql
+      services: [ts-rebook-service]
+      port: 3306
+    - name: ts-assurance-mysql
+      services: [ts-assurance-service]
+      port: 3306
+    - name: ts-news-mysql
+      services: [ts-news-service]
+      port: 3306
+    - name: ts-voucher-mysql
+      services: [ts-voucher-service]
+      port: 3306
+    - name: ts-food-mysql
+      services: [ts-food-service]
+      port: 3306
+    - name: ts-consign-mysql
+      services: [ts-consign-service]
+      port: 3306
+    - name: ts-consign-price-mysql
+      services: [ts-consign-price-service]
+      port: 3306
+    - name: ts-delivery-mysql
+      services: [ts-delivery-service]
+      port: 3306
+    - name: ts-food-delivery-mysql
+      services: [ts-food-delivery-service]
+      port: 3306
+    - name: ts-gateway-mysql
+      services: [ts-gateway-service]
+      port: 3306
+    - name: ts-station-food-mysql
+      services: [ts-station-food-service]
+      port: 3306
+    - name: ts-train-food-mysql
+      services: [ts-train-food-service]
+      port: 3306
+    - name: ts-wait-order-mysql
+      services: [ts-wait-order-service]
+      port: 3306
+    - name: ts-route-mysql
+      services: [ts-route-service]
+      port: 3306
+
+  redis:
+    port: 6379
+    used_by: [ts-gateway-service, ts-auth-service]
+
+entry_points:
+  - service: ts-gateway-service
+    port: 18888
+    type: api_gateway
+  - service: ts-ui-dashboard
+    port: 8080
+    type: frontend
+
+services:
+  ts-preserve-service:
+    port: 14568
+    description: "Booking service for high-speed trains (G/D)"
+    calls:
+      - target: ts-security-service
+        purpose: "anti-scalper check"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-contacts-service
+        purpose: "get contact info"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel-service
+        purpose: "get trip detail"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-basic-service
+        purpose: "get travel result"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-seat-service
+        purpose: "dispatch seat"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-order-service
+        purpose: "create order"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-assurance-service
+        purpose: "add insurance"
+        criticality: low
+        timeout_ms: 3000
+      - target: ts-food-service
+        purpose: "create food order"
+        criticality: low
+        timeout_ms: 3000
+      - target: ts-consign-service
+        purpose: "create consign"
+        criticality: low
+        timeout_ms: 3000
+      - target: ts-user-service
+        purpose: "get user info"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-preserve-other-service:
+    port: 14569
+    description: "Booking service for normal trains (Z/K)"
+    calls:
+      - target: ts-security-service
+        purpose: "anti-scalper check"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-contacts-service
+        purpose: "get contact info"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel2-service
+        purpose: "get trip detail"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-basic-service
+        purpose: "get travel result"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-seat-service
+        purpose: "dispatch seat"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-order-other-service
+        purpose: "create order"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-assurance-service
+        purpose: "add insurance"
+        criticality: low
+        timeout_ms: 3000
+      - target: ts-food-service
+        purpose: "create food order"
+        criticality: low
+        timeout_ms: 3000
+      - target: ts-consign-service
+        purpose: "create consign"
+        criticality: low
+        timeout_ms: 3000
+      - target: ts-user-service
+        purpose: "get user info"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-notification-service
+        purpose: "send notification"
+        criticality: low
+        timeout_ms: 3000
+    has_db: false
+
+  ts-cancel-service:
+    port: 18885
+    description: "Cancel order service"
+    calls:
+      - target: ts-order-service
+        purpose: "get/update order (G/D)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-order-other-service
+        purpose: "get/update order (Z/K)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-inside-payment-service
+        purpose: "refund money"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-user-service
+        purpose: "get user info"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-rebook-service:
+    port: 18886
+    description: "Change/rebook ticket service"
+    calls:
+      - target: ts-order-service
+        purpose: "get/update order (G/D)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-order-other-service
+        purpose: "get/update order (Z/K)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-travel-service
+        purpose: "get trip detail (G/D)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel2-service
+        purpose: "get trip detail (Z/K)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-seat-service
+        purpose: "dispatch new seat"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-inside-payment-service
+        purpose: "pay difference"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-route-service
+        purpose: "get route"
+        criticality: medium
+        timeout_ms: 3000
+      - target: ts-train-service
+        purpose: "get train type"
+        criticality: medium
+        timeout_ms: 3000
+    has_db: false
+
+  ts-execute-service:
+    port: 12386
+    description: "Ticket collection/usage service"
+    calls:
+      - target: ts-order-service
+        purpose: "get/update order status (G/D)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-order-other-service
+        purpose: "get/update order status (Z/K)"
+        criticality: critical
+        timeout_ms: 5000
+    has_db: false
+
+  ts-travel-plan-service:
+    port: 14322
+    description: "Travel planning service"
+    calls:
+      - target: ts-route-plan-service
+        purpose: "get cheapest/quickest routes"
+        criticality: high
+        timeout_ms: 5000
+      - target: ts-travel-service
+        purpose: "get high-speed trips"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel2-service
+        purpose: "get normal trips"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-seat-service
+        purpose: "get remaining tickets"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-train-service
+        purpose: "get train type"
+        criticality: medium
+        timeout_ms: 3000
+    has_db: false
+
+  ts-route-plan-service:
+    port: 14578
+    description: "Route planning service"
+    calls:
+      - target: ts-route-service
+        purpose: "get routes"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel-service
+        purpose: "get trips by route (G/D)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel2-service
+        purpose: "get trips by route (Z/K)"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-basic-service:
+    port: 15680
+    description: "Basic info aggregation for travel"
+    calls:
+      - target: ts-station-service
+        purpose: "station lookup"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-train-service
+        purpose: "train lookup"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-route-service
+        purpose: "route lookup"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-price-service
+        purpose: "price lookup"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-order-service:
+    port: 12031
+    description: "Order management for G/D trains"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-order-other-service:
+    port: 12032
+    description: "Order management for Z/K trains"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-inside-payment-service:
+    port: 18673
+    description: "Internal payment/wallet service"
+    calls:
+      - target: ts-order-service
+        purpose: "get/update order (G/D)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-order-other-service
+        purpose: "get/update order (Z/K)"
+        criticality: critical
+        timeout_ms: 5000
+      - target: ts-payment-service
+        purpose: "external payment"
+        criticality: critical
+        timeout_ms: 5000
+    has_db: true
+    db_type: mysql
+
+  ts-payment-service:
+    port: 19001
+    description: "External payment service"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-food-service:
+    port: 18856
+    description: "Food ordering service"
+    calls:
+      - target: ts-train-food-service
+        purpose: "get train food list"
+        criticality: medium
+        timeout_ms: 3000
+      - target: ts-travel-service
+        purpose: "get route info"
+        criticality: medium
+        timeout_ms: 3000
+      - target: ts-station-food-service
+        purpose: "get station food stores"
+        criticality: medium
+        timeout_ms: 3000
+    has_db: true
+    db_type: mysql
+
+  ts-food-delivery-service:
+    port: 18857
+    description: "Food delivery order service"
+    calls:
+      - target: ts-station-food-service
+        purpose: "get station food store"
+        criticality: medium
+        timeout_ms: 3000
+    has_db: true
+    db_type: mysql
+
+  ts-station-food-service:
+    port: 18855
+    description: "Station food stores"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-train-food-service:
+    port: 19999
+    description: "Train food menu"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-consign-service:
+    port: 16111
+    description: "Consign/shipment service"
+    calls:
+      - target: ts-consign-price-service
+        purpose: "calculate shipping price"
+        criticality: high
+        timeout_ms: 3000
+    has_db: true
+    db_type: mysql
+
+  ts-consign-price-service:
+    port: 16110
+    description: "Consign pricing"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-user-service:
+    port: 12342
+    description: "User profile management"
+    calls:
+      - target: ts-auth-service
+        purpose: "create/delete auth user"
+        criticality: high
+        timeout_ms: 3000
+    has_db: true
+    db_type: mysql
+
+  ts-auth-service:
+    port: 12340
+    description: "Authentication and token service"
+    calls:
+      - target: ts-verification-code-service
+        purpose: "verify captcha"
+        criticality: medium
+        timeout_ms: 3000
+    has_db: true
+    db_type: mysql
+
+  ts-verification-code-service:
+    port: 15678
+    description: "Captcha verification"
+    calls: []
+    has_db: false
+
+  ts-station-service:
+    port: 12345
+    description: "Station CRUD/lookup"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-train-service:
+    port: 14567
+    description: "Train type CRUD/lookup"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-route-service:
+    port: 11178
+    description: "Route management"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-price-service:
+    port: 16579
+    description: "Price configuration"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-config-service:
+    port: 15679
+    description: "System configuration"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-contacts-service:
+    port: 12347
+    description: "Contact person management"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-seat-service:
+    port: 18898
+    description: "Seat allocation service"
+    calls:
+      - target: ts-order-service
+        purpose: "get sold tickets (G/D)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-order-other-service
+        purpose: "get sold tickets (Z/K)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-config-service
+        purpose: "get config"
+        criticality: medium
+        timeout_ms: 3000
+    has_db: false
+
+  ts-security-service:
+    port: 11188
+    description: "Anti-scalper security check"
+    calls:
+      - target: ts-order-service
+        purpose: "check orders (G/D)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-order-other-service
+        purpose: "check orders (Z/K)"
+        criticality: high
+        timeout_ms: 3000
+    has_db: true
+    db_type: mysql
+
+  ts-notification-service:
+    port: 17853
+    description: "Email notification service"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-assurance-service:
+    port: 18888
+    description: "Insurance management"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-admin-basic-info-service:
+    port: 18767
+    description: "Admin: CRUD for contacts, stations, trains, configs, prices"
+    calls:
+      - target: ts-contacts-service
+        purpose: "CRUD contacts"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-station-service
+        purpose: "CRUD stations"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-train-service
+        purpose: "CRUD trains"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-config-service
+        purpose: "CRUD configs"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-price-service
+        purpose: "CRUD prices"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-admin-order-service:
+    port: 16112
+    description: "Admin: Order management"
+    calls:
+      - target: ts-order-service
+        purpose: "CRUD orders (G/D)"
+        criticality: high
+        timeout_ms: 5000
+      - target: ts-order-other-service
+        purpose: "CRUD orders (Z/K)"
+        criticality: high
+        timeout_ms: 5000
+    has_db: false
+
+  ts-admin-route-service:
+    port: 16113
+    description: "Admin: Route management"
+    calls:
+      - target: ts-route-service
+        purpose: "CRUD routes"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-station-service
+        purpose: "validate stations"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-admin-travel-service:
+    port: 16114
+    description: "Admin: Travel management"
+    calls:
+      - target: ts-travel-service
+        purpose: "CRUD trips (G/D)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-travel2-service
+        purpose: "CRUD trips (Z/K)"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-station-service
+        purpose: "validate stations"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-train-service
+        purpose: "validate trains"
+        criticality: high
+        timeout_ms: 3000
+      - target: ts-route-service
+        purpose: "validate routes"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-admin-user-service:
+    port: 16115
+    description: "Admin: User management"
+    calls:
+      - target: ts-user-service
+        purpose: "CRUD users"
+        criticality: high
+        timeout_ms: 3000
+    has_db: false
+
+  ts-wait-order-service:
+    port: 18887
+    description: "Waitlist order service (polling)"
+    calls:
+      - target: ts-preserve-service
+        purpose: "attempt booking (polling)"
+        criticality: high
+        timeout_ms: 5000
+    has_db: true
+    db_type: mysql
+
+  ts-delivery-service:
+    port: 18889
+    description: "Delivery service"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-gateway-service:
+    port: 18888
+    description: "API Gateway (Spring Cloud Gateway)"
+    calls: []
+    has_db: true
+    db_type: mysql
+    routes_to:
+      - ts-admin-basic-info-service
+      - ts-admin-order-service
+      - ts-admin-route-service
+      - ts-admin-travel-service
+      - ts-admin-user-service
+      - ts-assurance-service
+      - ts-auth-service
+      - ts-basic-service
+      - ts-cancel-service
+      - ts-config-service
+      - ts-consign-price-service
+      - ts-consign-service
+      - ts-contacts-service
+      - ts-execute-service
+      - ts-food-service
+      - ts-inside-payment-service
+      - ts-notification-service
+      - ts-order-other-service
+      - ts-order-service
+      - ts-payment-service
+      - ts-preserve-other-service
+      - ts-preserve-service
+      - ts-price-service
+      - ts-rebook-service
+      - ts-route-plan-service
+      - ts-route-service
+      - ts-seat-service
+      - ts-security-service
+      - ts-station-food-service
+      - ts-station-service
+      - ts-train-food-service
+      - ts-train-service
+      - ts-travel-plan-service
+      - ts-travel-service
+      - ts-travel2-service
+      - ts-user-service
+      - ts-verification-code-service
+
+  ts-avatar-service:
+    port: 17001
+    description: "User avatar service (Node.js)"
+    calls: []
+    has_db: false
+
+  ts-voucher-service:
+    port: 18881
+    description: "Voucher generation service (Go)"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-news-service:
+    port: 12890
+    description: "News service"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-ticket-office-service:
+    port: 16109
+    description: "Ticket office service"
+    calls: []
+    has_db: true
+    db_type: mongodb
+
+  ts-ui-dashboard:
+    port: 8080
+    description: "Web UI dashboard"
+    calls:
+      - target: ts-gateway-service
+        purpose: "API requests"
+        criticality: high
+        timeout_ms: 10000
+    has_db: false
+
+  ts-travel-service:
+    port: 12346
+    description: "Travel/trip service for high-speed trains"
+    calls: []
+    has_db: true
+    db_type: mysql
+
+  ts-travel2-service:
+    port: 16346
+    description: "Travel/trip service for normal trains"
+    calls: []
+    has_db: true
+    db_type: mysql

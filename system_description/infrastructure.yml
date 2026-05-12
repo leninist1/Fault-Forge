@@ -1,0 +1,235 @@
+# Train-Ticket Infrastructure Description
+#
+# Input to FSE Stage 1/2. Captures the non-service substrate of the system:
+# databases, message queues, caches, network, and container platform.
+#
+# Schema version: 1.0
+
+schema_version: "1.0"
+system: train-ticket
+
+# ============================================================================
+# Databases
+# ============================================================================
+databases:
+
+  # One MySQL instance per stateful service (microservice pattern)
+  - name: ts-auth-mysql
+    kind: mysql
+    version: "5.7"
+    used_by: [ts-auth-service]
+    critical: true
+    typical_tables: [user_details]
+
+  - name: ts-user-mysql
+    kind: mysql
+    used_by: [ts-user-service]
+    critical: true
+    typical_tables: [user]
+
+  - name: ts-contacts-mysql
+    kind: mysql
+    used_by: [ts-contacts-service]
+    critical: true
+    typical_tables: [contacts]
+
+  - name: ts-order-mysql
+    kind: mysql
+    used_by: [ts-order-service]
+    critical: true
+    typical_tables: [orders]
+    notes: "Holds high-speed-train (G/D) order records. Primary business state."
+
+  - name: ts-order-other-mysql
+    kind: mysql
+    used_by: [ts-order-other-service]
+    critical: true
+    typical_tables: [orders, orders_other]
+    notes: "Holds normal-train (Z/K) order records."
+
+  - name: ts-config-mysql
+    kind: mysql
+    used_by: [ts-config-service]
+    critical: true
+    typical_tables: [configs, config]
+
+  - name: ts-station-mysql
+    kind: mysql
+    used_by: [ts-station-service]
+    typical_tables: [stations]
+
+  - name: ts-train-mysql
+    kind: mysql
+    used_by: [ts-train-service]
+    typical_tables: [train_types, train_type]
+
+  - name: ts-travel-mysql
+    kind: mysql
+    used_by: [ts-travel-service]
+    typical_tables: [trips]
+
+  - name: ts-travel2-mysql
+    kind: mysql
+    used_by: [ts-travel2-service]
+    typical_tables: [trips]
+
+  - name: ts-price-mysql
+    kind: mysql
+    used_by: [ts-price-service]
+    typical_tables: [prices]
+
+  - name: ts-route-mysql
+    kind: mysql
+    used_by: [ts-route-service]
+    typical_tables: [routes]
+
+  - name: ts-inside-payment-mysql
+    kind: mysql
+    used_by: [ts-inside-payment-service]
+    critical: true
+    typical_tables: [payments, refunds, inside_payment, inside_money]
+
+  - name: ts-payment-mysql
+    kind: mysql
+    used_by: [ts-payment-service]
+    typical_tables: [payments, money]
+
+  - name: ts-security-mysql
+    kind: mysql
+    used_by: [ts-security-service]
+    typical_tables: [security_config]
+
+  - name: ts-notification-mysql
+    kind: mysql
+    used_by: [ts-notification-service]
+    typical_tables: [notify_info, notifications]
+
+  - name: ts-rebook-mysql
+    kind: mysql
+    used_by: [ts-rebook-service]
+    typical_tables: [rebook_records]
+
+  - name: ts-assurance-mysql
+    kind: mysql
+    used_by: [ts-assurance-service]
+    typical_tables: [assurance_type, assurance]
+
+  - name: ts-food-mysql
+    kind: mysql
+    used_by: [ts-food-service]
+    typical_tables: [food_order]
+
+  - name: ts-consign-mysql
+    kind: mysql
+    used_by: [ts-consign-service]
+    typical_tables: [consign_record]
+
+  - name: ts-consign-price-mysql
+    kind: mysql
+    used_by: [ts-consign-price-service]
+    typical_tables: [consign_price]
+
+  - name: ts-delivery-mysql
+    kind: mysql
+    used_by: [ts-delivery-service]
+    typical_tables: [delivery]
+
+  - name: ts-food-delivery-mysql
+    kind: mysql
+    used_by: [ts-food-delivery-service]
+    typical_tables: [food_delivery_order]
+
+  - name: ts-gateway-mysql
+    kind: mysql
+    used_by: [ts-gateway-service]
+    critical: true
+
+  - name: ts-station-food-mysql
+    kind: mysql
+    used_by: [ts-station-food-service]
+
+  - name: ts-train-food-mysql
+    kind: mysql
+    used_by: [ts-train-food-service]
+
+  - name: ts-wait-order-mysql
+    kind: mysql
+    used_by: [ts-wait-order-service]
+    typical_tables: [wait_list_order, wait_orders]
+
+  - name: ts-news-mysql
+    kind: mysql
+    used_by: [ts-news-service]
+
+  - name: ts-voucher-mysql
+    kind: mysql
+    used_by: [ts-voucher-service]
+    typical_tables: [voucher]
+
+  - name: ts-ticket-office-mongo
+    kind: mongodb
+    used_by: [ts-ticket-office-service]
+
+# ============================================================================
+# Caches
+# ============================================================================
+caches:
+
+  - name: ts-redis
+    kind: redis
+    version: "6.x"
+    used_by: [ts-gateway-service, ts-auth-service]
+    purpose: "gateway routing cache, auth token cache"
+    critical: true
+
+# ============================================================================
+# Message Queues
+# ============================================================================
+# Train-Ticket does NOT use a dedicated MQ in default deployments; notifications are
+# synchronous HTTP. This is documented here explicitly so FSE does not hallucinate
+# MQ-related faults.
+message_queues: []
+
+# ============================================================================
+# Container Platform
+# ============================================================================
+container_platform:
+  orchestrator: docker_compose   # default; also supports kubernetes
+  network: bridge
+  service_discovery: docker_dns  # via container hostnames
+  gateway: ts-gateway-service
+
+# ============================================================================
+# External Dependencies
+# ============================================================================
+external_dependencies:
+  - name: smtp
+    used_by: [ts-notification-service]
+    purpose: "email notifications"
+    optional: true
+  - name: external_payment_gateway
+    used_by: [ts-payment-service]
+    purpose: "simulated external payment"
+    optional: true
+
+# ============================================================================
+# Observability Stack
+# ============================================================================
+observability:
+  metrics: prometheus
+  logs: loki
+  traces: jaeger
+  business_metrics: business_observatory.metrics  # Prometheus exporter
+  invariant_monitor: prism.invariants.invariant_runner  # NEW
+
+# ============================================================================
+# Deployment Topology
+# ============================================================================
+deployment:
+  replicas_per_service: 1
+  stateful_services_have_sidecar_db: true
+  notes: |
+    Each microservice is deployed as a single container paired with its own
+    MySQL container. Databases are NOT shared across services — a cardinal
+    microservices rule. This means data-consistency faults propagate via
+    HTTP calls rather than shared-DB races.

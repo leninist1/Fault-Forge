@@ -1,0 +1,19 @@
+dimensions:
+  data_consistency:
+    injectors: [database_modifier]
+    templates: [T2, T4, T5, T7]
+  state_transition:
+    injectors: [database_modifier, logic_fault]
+    templates: [T1]
+  amount_or_price_drift:
+    injectors: [database_modifier]
+    templates: [T3, T6]
+  stale_configuration:
+    injectors: [database_modifier, config_modifier]
+    templates: [T6]
+  partial_workflow_commit:
+    injectors: [database_modifier]
+    templates: [T7]
+  infra_business_impact:
+    injectors: [resource_limit, host_iptables]
+    templates: [T8]

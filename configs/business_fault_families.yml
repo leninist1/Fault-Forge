@@ -1,0 +1,1282 @@
+version: 1
+description: Curated Train-Ticket business fault families for ASE NIER gold production.
+gold_admission:
+  canary_attempts: 3
+  min_gold_rate: 0.50
+  require_cleanup_healthy: true
+  require_strong_evidence: true
+families:
+  - id: order_status_divergence
+    name: Order status divergence
+    journey: order_cancel_rebook
+    entity: order
+    invariant: INV-ORDER-STATE-008
+    dimension: state_transition
+    semantic_violation_type: illegal_order_state_transition
+    injector_family: database_modifier
+    canary_status: ready_known_gold_path
+    expected_impacts: [illegal_order_state_transition]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-ORDER-STATE-008]
+    expected_services: [ts-order-service, ts-cancel-service, ts-rebook-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: order_status_invalid_single
+        mode: single_point
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: status = 1
+        modify_value: 99
+        expected_propagation: [ts-order-service, ts-cancel-service]
+      - id: order_status_paid_without_payment_cascade
+        mode: cascading
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: status = 1
+        modify_value: 2
+        expected_propagation: [ts-order-service, ts-payment-service, ts-inside-payment-service]
+
+  - id: payment_order_mismatch
+    name: Payment succeeds while order state is inconsistent
+    journey: payment
+    entity: payment
+    invariant: INV-PAY-ORDER-001
+    dimension: data_consistency
+    semantic_violation_type: cross_service_state_mismatch
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [order_payment_consistency_violation]
+    expected_business_slis: [payment_submit_business_invalid_rate, order_read_success_rate]
+    expected_invariants: [INV-PAY-ORDER-001]
+    expected_services: [ts-order-service, ts-payment-service, ts-inside-payment-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: order_paid_without_payment_single
+        mode: single_point
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: status = 1
+        modify_value: 2
+        expected_propagation: [ts-order-service, ts-payment-service]
+      - id: payment_success_for_unpaid_order_cascade
+        mode: cascading
+        target_service: ts-payment-service
+        target_db: ts-payment-mysql
+        target_table: payments
+        target_field: order_id
+        condition: order_id IS NOT NULL
+        modify_value: 00000000-0000-0000-0000-000000000000
+        expected_propagation: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+
+  - id: payment_amount_drift
+    name: Payment amount drifts from order amount
+    journey: payment
+    entity: payment
+    invariant: INV-PAY-AMOUNT-002
+    dimension: amount_or_price_drift
+    semantic_violation_type: amount_or_price_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [payment_amount_drift]
+    expected_business_slis: [payment_submit_business_invalid_rate]
+    expected_invariants: [INV-PAY-AMOUNT-002]
+    expected_services: [ts-payment-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: zero_payment_amount_single
+        mode: single_point
+        target_service: ts-payment-service
+        target_db: ts-payment-mysql
+        target_table: payments
+        target_field: amount
+        condition: amount > 0
+        modify_value: 0
+        expected_propagation: [ts-payment-service, ts-order-service]
+      - id: negative_payment_amount_cascade
+        mode: cascading
+        target_service: ts-payment-service
+        target_db: ts-payment-mysql
+        target_table: payments
+        target_field: amount
+        condition: amount > 0
+        modify_value: -1
+        expected_propagation: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+
+  - id: inventory_preservation_mismatch
+    name: Booking succeeds without matching inventory change
+    journey: ticket_inventory_preservation
+    entity: ticket_inventory
+    invariant: INV-BOOK-INV-004
+    dimension: partial_workflow_commit
+    semantic_violation_type: inventory_reservation_mismatch
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [inventory_reservation_mismatch]
+    expected_business_slis: [booking_precheck_business_invalid_rate, booking_precheck_success_rate]
+    expected_invariants: [INV-BOOK-INV-004]
+    expected_services: [ts-preserve-service, ts-seat-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: preserve_order_without_seat_decrement_single
+        mode: single_point
+        target_service: ts-seat-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: seat_number
+        condition: status = 1 AND seat_number IS NOT NULL AND seat_number <> ''
+        modify_value: UNASSIGNED_BY_FAULT
+        expected_propagation: [ts-seat-service, ts-preserve-service]
+      - id: preserve_order_inventory_cascade
+        mode: cascading
+        target_service: ts-preserve-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: status = 1
+        modify_value: 0
+        expected_propagation: [ts-preserve-service, ts-seat-service, ts-order-service]
+
+  - id: cancel_without_inventory_release
+    name: Cancellation does not release preserved inventory
+    journey: order_cancel_rebook
+    entity: ticket_inventory
+    invariant: INV-CANCEL-INV-005
+    dimension: partial_workflow_commit
+    semantic_violation_type: cancel_release_mismatch
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [cancel_release_mismatch]
+    expected_business_slis: [booking_precheck_business_invalid_rate]
+    expected_invariants: [INV-CANCEL-INV-005]
+    expected_services: [ts-cancel-service, ts-seat-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: cancel_record_status_single
+        mode: single_point
+        target_service: ts-cancel-service
+        target_db: ts-cancel-mysql
+        target_table: cancel_records
+        target_field: status
+        condition: status = 1
+        modify_value: 9
+        expected_propagation: [ts-cancel-service, ts-seat-service]
+      - id: cancelled_order_inventory_cascade
+        mode: cascading
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: status = 1
+        modify_value: 4
+        expected_propagation: [ts-order-service, ts-cancel-service, ts-seat-service]
+
+  - id: contact_ownership_violation
+    name: Booking uses passenger contact owned by another user
+    journey: authentication_user_context
+    entity: contact
+    invariant: INV-CONTACT-OWN-006
+    dimension: data_consistency
+    semantic_violation_type: ownership_violation
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [passenger_ownership_violation]
+    expected_business_slis: [contacts_fetch_success_rate, booking_precheck_success_rate]
+    expected_invariants: [INV-CONTACT-OWN-006]
+    expected_services: [ts-contacts-service, ts-preserve-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: contact_account_swap_single
+        mode: single_point
+        target_service: ts-contacts-service
+        target_db: ts-contacts-mysql
+        target_table: contacts
+        target_field: account_id
+        condition: account_id IS NOT NULL
+        modify_value: OTHER_USER
+        expected_propagation: [ts-contacts-service, ts-preserve-service]
+      - id: preserve_foreign_contact_cascade
+        mode: cascading
+        target_service: ts-preserve-service
+        target_db: ts-preserve-mysql
+        target_table: preserve_orders
+        target_field: contacts_id
+        condition: contacts_id IS NOT NULL
+        modify_value: FOREIGN_CONTACT
+        expected_propagation: [ts-preserve-service, ts-contacts-service, ts-order-service]
+
+  - id: trip_reference_break
+    name: Trip search references invalid route or station data
+    journey: trip_search
+    entity: trip
+    invariant: INV-TRIP-REF-007
+    dimension: stale_configuration
+    semantic_violation_type: stale_business_configuration
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [invalid_trip_reference]
+    expected_business_slis: [trip_search_success_rate]
+    expected_invariants: [INV-TRIP-REF-007]
+    expected_services: [ts-travel-service, ts-route-service, ts-station-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: trip_missing_route_single
+        mode: single_point
+        target_service: ts-travel-service
+        target_db: ts-travel-mysql
+        target_table: trips
+        target_field: route_id
+        condition: route_id IS NOT NULL
+        modify_value: MISSING_ROUTE
+        expected_propagation: [ts-travel-service, ts-route-service]
+      - id: trip_station_route_cascade
+        mode: cascading
+        target_service: ts-route-service
+        target_db: ts-route-mysql
+        target_table: routes
+        target_field: start_station
+        condition: start_station IS NOT NULL
+        modify_value: MISSING_STATION
+        expected_propagation: [ts-route-service, ts-station-service, ts-travel-service]
+
+  - id: addon_orphan_order
+    name: Optional addon references missing or invalid ticket order
+    journey: optional_addons
+    entity: food_order
+    invariant: INV-ADDON-ORDER-011
+    dimension: data_consistency
+    semantic_violation_type: orphan_addon_order
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [orphan_addon_order]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-ADDON-ORDER-011]
+    expected_services: [ts-food-delivery-service, ts-order-service, ts-assurance-service, ts-consign-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: food_order_missing_parent_single
+        mode: single_point
+        target_service: ts-assurance-service
+        target_db: ts-assurance-mysql
+        target_table: assurance
+        target_field: orderId
+        condition: orderId IS NOT NULL
+        modify_value: NONEXISTENT_ORDER
+        expected_propagation: [ts-assurance-service, ts-order-service]
+      - id: addon_parent_order_cascade
+        mode: cascading
+        target_service: ts-consign-service
+        target_db: ts-consign-mysql
+        target_table: consign
+        target_field: orderId
+        condition: orderId = (SELECT order_id FROM consign_record WHERE order_id IS NOT NULL LIMIT 1)
+        modify_value: NONEXISTENT_ORDER
+        expected_propagation: [ts-consign-service, ts-assurance-service, ts-order-service]
+
+  - id: preserve_booking_validation_bypass
+    name: Booking precheck validation bypassed during preserve
+    journey: ticket_booking
+    entity: order
+    invariant: INV-PRESERVE-BYPASS-012
+    dimension: business_logic
+    semantic_violation_type: preserve_validation_bypass
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [preserve_validation_bypass, passenger_info_inconsistency]
+    expected_business_slis: [booking_precheck_success_rate, order_read_success_rate]
+    expected_invariants: [INV-PRESERVE-BYPASS-012]
+    expected_services: [ts-preserve-service, ts-order-service, ts-contacts-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: empty_passenger_name_single
+        mode: single_point
+        target_service: ts-preserve-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: contacts_name
+        condition: status IN (1, 2) AND contacts_name IS NOT NULL AND contacts_name <> ''
+        modify_value: BYPASSED_EMPTY_NAME
+        expected_propagation: [ts-preserve-service, ts-order-service]
+      - id: empty_document_number_cascade
+        mode: cascading
+        target_service: ts-preserve-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: contacts_document_number
+        condition: status IN (1, 2) AND contacts_document_number IS NOT NULL AND contacts_document_number <> ''
+        modify_value: BYPASSED_EMPTY_DOC
+        expected_propagation: [ts-preserve-service, ts-order-service, ts-contacts-service]
+
+  - id: order_price_divergence
+    name: Order price diverges from configured route price
+    journey: ticket_booking
+    entity: order
+    invariant: INV-PRICE-ORDER-003
+    dimension: amount_or_price_drift
+    semantic_violation_type: price_configuration_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [order_price_configuration_violation]
+    expected_business_slis: [booking_precheck_success_rate, order_read_business_invalid_rate]
+    expected_invariants: [INV-PRICE-ORDER-003]
+    expected_services: [ts-order-service, ts-price-service, ts-basic-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: negative_order_price_single
+        mode: single_point
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: price
+        condition: status IN (1, 2) AND price > 0
+        modify_value: -1
+        expected_propagation: [ts-order-service, ts-price-service]
+      - id: zero_order_price_cascade
+        mode: cascading
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: price
+        condition: status IN (1, 2) AND price > 1
+        modify_value: 0.01
+        expected_propagation: [ts-order-service, ts-price-service, ts-inside-payment-service]
+
+  - id: seat_double_booking
+    name: Two active orders assigned the same seat on same train
+    journey: ticket_booking
+    entity: seat
+    invariant: INV-SEAT-UNIQUE-013
+    dimension: partial_workflow_commit
+    semantic_violation_type: seat_allocation_conflict
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [seat_allocation_conflict, seat_uniqueness_violation]
+    expected_business_slis: [booking_precheck_business_invalid_rate, duplicate_seat_assignment_count]
+    expected_invariants: [INV-SEAT-UNIQUE-013]
+    expected_services: [ts-seat-service, ts-preserve-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: duplicate_seat_single_order_single
+        mode: single_point
+        target_service: ts-seat-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: train_number = 'G1234' AND seat_number = 'FirstClass-30' AND status NOT IN (1, 2, 5)
+        modify_value: 1
+        expected_propagation: [ts-seat-service, ts-order-service]
+      - id: concrete_seat_conflict_cascade
+        mode: cascading
+        target_service: ts-seat-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: train_number = 'G1235' AND seat_number = 'FirstClass-30' AND status NOT IN (1, 2, 5)
+        modify_value: 2
+        expected_propagation: [ts-seat-service, ts-preserve-service, ts-order-service]
+
+  - id: notification_order_orphan
+    name: Notification references invalid or missing ticket order
+    journey: notification
+    entity: notification
+    invariant: INV-NOTIFY-ORDER-014
+    dimension: data_consistency
+    semantic_violation_type: orphan_notification_order
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [orphan_notification_order, notification_delivery_failure]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-NOTIFY-ORDER-014]
+    expected_services: [ts-notification-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: notification_bad_order_single
+        mode: single_point
+        target_service: ts-notification-service
+        target_db: ts-notification-mysql
+        target_table: notify_info
+        target_field: order_number
+        condition: order_number IS NOT NULL AND order_number <> ''
+        modify_value: NONEXISTENT_ORDER
+        expected_propagation: [ts-notification-service, ts-order-service]
+      - id: notification_suppressed_cascade
+        mode: cascading
+        target_service: ts-notification-service
+        target_db: ts-notification-mysql
+        target_table: notify_info
+        target_field: send_status
+        condition: send_status IS NOT NULL
+        modify_value: 1
+        expected_propagation: [ts-notification-service, ts-order-service]
+
+  - id: config_value_drift
+    name: System configuration value drifts from expected range
+    journey: admin_manage
+    entity: config
+    invariant: INV-CONFIG-DRIFT-015
+    dimension: stale_configuration
+    semantic_violation_type: config_value_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [config_value_drift, stale_business_configuration]
+    expected_business_slis: [trip_search_business_invalid_rate, config_missing_key_count, config_out_of_range_count]
+    expected_invariants: [INV-CONFIG-DRIFT-015]
+    expected_services: [ts-config-service, ts-travel-service, ts-order-service, ts-price-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: direct_ticket_allocation_zero_single
+        mode: single_point
+        target_service: ts-config-service
+        target_db: ts-config-mysql
+        target_table: config
+        target_field: value
+        condition: name = 'DirectTicketAllocationProportion' AND value > 0
+        modify_value: 0.0
+        expected_propagation: [ts-config-service, ts-travel-service]
+      - id: direct_ticket_allocation_one_cascade
+        mode: cascading
+        target_service: ts-config-service
+        target_db: ts-config-mysql
+        target_table: config
+        target_field: value
+        condition: name = 'DirectTicketAllocationProportion' AND value < 1
+        modify_value: 1.0
+        expected_propagation: [ts-config-service, ts-travel-service, ts-order-service, ts-price-service]
+
+  - id: security_threshold_bypass
+    name: Security rate-limit threshold disabled causing abuse window
+    journey: security
+    entity: config
+    invariant: INV-SECURITY-BYPASS-016
+    dimension: business_logic
+    semantic_violation_type: security_threshold_bypass
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [security_threshold_bypass, rate_limit_disabled]
+    expected_business_slis: [booking_precheck_success_rate]
+    expected_invariants: [INV-SECURITY-BYPASS-016]
+    expected_services: [ts-security-service, ts-preserve-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: max_order_1_hour_zero_single
+        mode: single_point
+        target_service: ts-security-service
+        target_db: ts-security-mysql
+        target_table: security_config
+        target_field: value
+        condition: name = 'max_order_1_hour' AND value > 0
+        modify_value: 0
+        expected_propagation: [ts-security-service, ts-preserve-service]
+      - id: max_order_not_use_zero_cascade
+        mode: cascading
+        target_service: ts-security-service
+        target_db: ts-security-mysql
+        target_table: security_config
+        target_field: value
+        condition: name = 'max_order_not_use' AND value > 0
+        modify_value: 0
+        expected_propagation: [ts-security-service, ts-preserve-service, ts-order-service]
+
+  - id: rebook_state_inconsistency
+    name: Order stuck in rebook state without proper metadata
+    journey: rebook
+    entity: order
+    invariant: INV-REBOOK-TRACE-010
+    dimension: state_transition
+    semantic_violation_type: incomplete_rebook_transition
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [lost_rebook_traceability, illegal_order_state_transition]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-REBOOK-TRACE-010]
+    expected_services: [ts-rebook-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: order_rebook_state_single
+        mode: single_point
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: status
+        condition: status = 1
+        modify_value: 5
+        expected_propagation: [ts-order-service, ts-rebook-service]
+      - id: rebook_price_cleared_cascade
+        mode: cascading
+        target_service: ts-order-service
+        target_db: ts-order-mysql
+        target_table: orders
+        target_field: price
+        condition: status = 1 AND price > 0
+        modify_value: 0.01
+        expected_propagation: [ts-order-service, ts-rebook-service, ts-inside-payment-service]
+
+  - id: inside_payment_balance_drift
+    name: Inside-payment wallet balance or payment amount drifts from expected value
+    journey: payment
+    entity: payment
+    invariant: INV-INSIDE-PAY-020
+    dimension: amount_or_price_drift
+    semantic_violation_type: inside_payment_amount_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [inside_payment_drift, wallet_balance_corruption]
+    expected_business_slis: [payment_submit_business_invalid_rate]
+    expected_invariants: [INV-INSIDE-PAY-020]
+    expected_services: [ts-inside-payment-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: wallet_balance_zero_single
+        mode: single_point
+        target_service: ts-inside-payment-service
+        target_db: ts-inside-payment-mysql
+        target_table: inside_money
+        target_field: money
+        condition: money > 0
+        modify_value: 0
+        expected_propagation: [ts-inside-payment-service, ts-order-service]
+      - id: payment_price_drift_cascade
+        mode: cascading
+        target_service: ts-inside-payment-service
+        target_db: ts-inside-payment-mysql
+        target_table: inside_payment
+        target_field: price
+        condition: price > 0
+        modify_value: -1
+        expected_propagation: [ts-inside-payment-service, ts-order-service, ts-payment-service]
+
+  - id: voucher_order_orphan
+    name: Voucher references invalid or missing ticket order
+    journey: voucher
+    entity: order
+    invariant: INV-VOUCHER-ORDER-017
+    dimension: data_consistency
+    semantic_violation_type: orphan_voucher_order
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [orphan_voucher_order]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-VOUCHER-ORDER-017]
+    expected_services: [ts-voucher-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: voucher_bad_order_single
+        mode: single_point
+        target_service: ts-voucher-service
+        target_db: ts-voucher-mysql
+        target_table: voucher
+        target_field: order_id
+        condition: order_id IS NOT NULL AND order_id <> ''
+        modify_value: NONEXISTENT_ORDER
+        expected_propagation: [ts-voucher-service, ts-order-service]
+      - id: voucher_zero_price_cascade
+        mode: cascading
+        target_service: ts-voucher-service
+        target_db: ts-voucher-mysql
+        target_table: voucher
+        target_field: price
+        condition: price > 0
+        modify_value: 0
+        expected_propagation: [ts-voucher-service, ts-order-service]
+
+  - id: delivery_order_orphan
+    name: Food delivery record references invalid order
+    journey: delivery
+    entity: food_order
+    invariant: INV-DELIVERY-ORDER-018
+    dimension: data_consistency
+    semantic_violation_type: orphan_delivery_order
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [orphan_delivery_order]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-DELIVERY-ORDER-018]
+    expected_services: [ts-delivery-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: delivery_bad_order_single
+        mode: single_point
+        target_service: ts-delivery-service
+        target_db: ts-delivery-mysql
+        target_table: delivery
+        target_field: order_id
+        condition: order_id IS NULL
+        modify_value: NONEXISTENT_ORDER
+        expected_propagation: [ts-delivery-service, ts-order-service]
+      - id: delivery_empty_food_cascade
+        mode: cascading
+        target_service: ts-delivery-service
+        target_db: ts-delivery-mysql
+        target_table: delivery
+        target_field: food_name
+        condition: food_name IS NOT NULL AND food_name <> ''
+        modify_value: CLEARED_FOOD_NAME
+        expected_propagation: [ts-delivery-service, ts-food-delivery-service]
+
+  - id: train_type_config_drift
+    name: Train type capacity or speed config drifts to invalid values
+    journey: route_planning
+    entity: train
+    invariant: INV-TRAIN-TYPE-019
+    dimension: stale_configuration
+    semantic_violation_type: train_type_config_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [train_type_config_drift, stale_business_configuration]
+    expected_business_slis: [trip_search_success_rate]
+    expected_invariants: [INV-TRAIN-TYPE-019]
+    expected_services: [ts-train-service, ts-travel-service, ts-basic-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: economy_class_zero_single
+        mode: single_point
+        target_service: ts-train-service
+        target_db: ts-train-mysql
+        target_table: train_type
+        target_field: economy_class
+        condition: economy_class > 0
+        modify_value: 0
+        expected_propagation: [ts-train-service, ts-travel-service]
+      - id: average_speed_zero_cascade
+        mode: cascading
+        target_service: ts-train-service
+        target_db: ts-train-mysql
+        target_table: train_type
+        target_field: average_speed
+        condition: average_speed > 0
+        modify_value: 0
+        expected_propagation: [ts-train-service, ts-travel-service, ts-basic-service, ts-route-plan-service]
+
+  - id: order_other_price_drift
+    name: Other-train-type order price diverges from expected range
+    journey: order_cancel_rebook
+    entity: order
+    invariant: INV-PRICE-ORDER-003
+    dimension: amount_or_price_drift
+    semantic_violation_type: order_other_price_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [order_price_configuration_violation]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-PRICE-ORDER-003]
+    expected_services: [ts-order-other-service, ts-price-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: orders_other_negative_price_single
+        mode: single_point
+        target_service: ts-order-other-service
+        target_db: ts-order-other-mysql
+        target_table: orders_other
+        target_field: price
+        condition: status IN (1, 2) AND price > 0
+        modify_value: -1
+        expected_propagation: [ts-order-other-service, ts-price-service]
+      - id: orders_other_trivial_price_cascade
+        mode: cascading
+        target_service: ts-order-other-service
+        target_db: ts-order-other-mysql
+        target_table: orders_other
+        target_field: price
+        condition: status = 1 AND price > 1
+        modify_value: 0.01
+        expected_propagation: [ts-order-other-service, ts-price-service, ts-rebook-service]
+
+  - id: wait_order_state_divergence
+    name: Wait-order status diverges from expected state machine
+    journey: wait_order
+    entity: wait_order
+    invariant: INV-WAIT-STATE-021
+    dimension: state_transition
+    semantic_violation_type: illegal_wait_order_state_transition
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [illegal_wait_order_state_transition, wait_order_price_drift]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-WAIT-STATE-021]
+    expected_services: [ts-wait-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: wait_order_skip_paid_single
+        mode: single_point
+        target_service: ts-wait-order-service
+        target_db: ts-wait-order-mysql
+        target_table: wait_list_order
+        target_field: status
+        condition: id = 'wo-canary-target-001'
+        modify_value: 2
+        expected_propagation: [ts-wait-order-service]
+      - id: wait_order_paid_zero_price_cascade
+        mode: cascading
+        target_service: ts-wait-order-service
+        target_db: ts-wait-order-mysql
+        target_table: wait_list_order
+        target_field: price
+        condition: id = 'wo-paid-seed-0001'
+        modify_value: 0
+        expected_propagation: [ts-wait-order-service, ts-travel-service]
+
+  - id: food_order_inconsistency
+    name: Food order referencing inconsistent ticket or price data
+    journey: booking_with_food
+    entity: food_order
+    invariant: INV-FOOD-ORDER-022
+    dimension: data_consistency
+    semantic_violation_type: food_order_data_inconsistency
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [food_order_price_drift, food_delivery_orphan]
+    expected_business_slis: [order_read_success_rate]
+    expected_invariants: [INV-FOOD-ORDER-022]
+    expected_services: [ts-food-service, ts-food-delivery-service, ts-order-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: food_order_zero_price_single
+        mode: single_point
+        target_service: ts-food-service
+        target_db: ts-food-mysql
+        target_table: food_order
+        target_field: price
+        condition: price > 0
+        modify_value: 0
+        expected_propagation: [ts-food-service, ts-order-service]
+      - id: food_delivery_invalid_trip_cascade
+        mode: cascading
+        target_service: ts-food-delivery-service
+        target_db: ts-food-delivery-mysql
+        target_table: food_delivery_order
+        target_field: trip_id
+        condition: trip_id IS NOT NULL AND trip_id <> ''
+        modify_value: CLEARED_TRIP
+        expected_propagation: [ts-food-delivery-service, ts-travel-service, ts-order-service]
+
+  - id: consign_price_weight_drift
+    name: Consign price config drifts to invalid values
+    journey: consign
+    entity: consign_record
+    invariant: INV-CONSIGN-PRICE-023
+    dimension: amount_or_price_drift
+    semantic_violation_type: consign_price_weight_drift
+    injector_family: database_modifier
+    canary_status: pending_runtime_validation
+    expected_impacts: [consign_price_drift, consign_weight_drift]
+    expected_business_slis: [booking_precheck_success_rate]
+    expected_invariants: [INV-CONSIGN-PRICE-023]
+    expected_services: [ts-consign-service, ts-consign-price-service]
+    cleanup_strategy: restore_modified_rows_from_snapshot
+    variants:
+      - id: consign_initial_price_zero_single
+        mode: single_point
+        target_service: ts-consign-price-service
+        target_db: ts-consign-price-mysql
+        target_table: consign_price
+        target_field: initial_price
+        condition: id = '0c5eebaa-949d-45ff-948c-234037154fe2'
+        modify_value: 0
+        expected_propagation: [ts-consign-price-service, ts-consign-service]
+      - id: consign_initial_weight_zero_cascade
+        mode: cascading
+        target_service: ts-consign-price-service
+        target_db: ts-consign-price-mysql
+        target_table: consign_price
+        target_field: initial_weight
+        condition: id = '0c5eebaa-949d-45ff-948c-234037154fe2'
+        modify_value: 0
+        expected_propagation: [ts-consign-price-service, ts-consign-service, ts-order-service]
+
+  - id: payment_resource_degradation
+    name: Payment service resource degradation causes user-visible payment failures
+    journey: payment
+    entity: payment
+    invariant: INV-PAY-ORDER-001
+    dimension: resource_degradation
+    semantic_violation_type: payment_resource_exhaustion
+    injector_family: resource_limit
+    root_injection_layer: resource
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [payment_timeout, payment_submit_failure]
+    expected_business_slis: [payment_submit_success_rate, payment_submit_timeout_rate, payment_submit_http_5xx_rate, payment_submit_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: payment_submit_success_rate
+        direction: down
+      - metric: payment_submit_timeout_rate
+        direction: up
+      - metric: payment_submit_http_5xx_rate
+        direction: up
+    expected_invariants: [INV-PAY-ORDER-001]
+    expected_services: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+    cleanup_strategy: remove_resource_limit_and_wait_for_recovery
+    variants:
+      - id: payment_cpu_throttle_single
+        mode: single_point
+        root_injection_layer: resource
+        target_service: ts-payment-service
+        target_db: resource
+        target_table: container_limits
+        target_field: cpu_quota
+        condition: container = 'ts-payment-service'
+        modify_value: cpu_quota_10_percent
+        expected_propagation: [ts-payment-service, ts-order-service]
+      - id: payment_memory_pressure_cascade
+        mode: cascading
+        root_injection_layer: resource
+        target_service: ts-payment-service
+        target_db: resource
+        target_table: container_limits
+        target_field: memory_limit
+        condition: container = 'ts-payment-service'
+        modify_value: memory_limit_128m
+        expected_propagation: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+
+  - id: seat_preserve_network_partition
+    name: Seat and preserve service network partition disrupts booking consistency
+    journey: ticket_booking
+    entity: seat
+    invariant: INV-SEAT-UNIQUE-013
+    dimension: network_partition
+    semantic_violation_type: seat_preserve_partition
+    injector_family: host_iptables
+    root_injection_layer: network
+    business_effect_type: cross_entity_consistency
+    canary_status: pending_runtime_validation
+    expected_impacts: [seat_preserve_timeout, duplicate_seat_risk]
+    expected_business_slis: [booking_precheck_success_rate, booking_precheck_timeout_rate, duplicate_seat_assignment_count, booking_precheck_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: booking_precheck_success_rate
+        direction: down
+      - metric: booking_precheck_timeout_rate
+        direction: up
+      - metric: duplicate_seat_assignment_count
+        direction: up
+    expected_invariants: [INV-SEAT-UNIQUE-013]
+    expected_services: [ts-seat-service, ts-preserve-service, ts-order-service]
+    cleanup_strategy: remove_iptables_partition_and_wait_for_recovery
+    variants:
+      - id: seat_to_preserve_partition_single
+        mode: single_point
+        root_injection_layer: network
+        target_service: ts-seat-service
+        target_db: network
+        target_table: service_link
+        target_field: packet_drop
+        condition: dst = 'ts-preserve-service'
+        modify_value: drop_100_percent
+        expected_propagation: [ts-seat-service, ts-preserve-service]
+      - id: preserve_order_seat_partition_cascade
+        mode: cascading
+        root_injection_layer: network
+        target_service: ts-preserve-service
+        target_db: network
+        target_table: service_link
+        target_field: packet_drop
+        condition: dst IN ('ts-seat-service','ts-order-service')
+        modify_value: drop_100_percent
+        expected_propagation: [ts-preserve-service, ts-seat-service, ts-order-service]
+
+  - id: order_mysql_network_degradation
+    name: Order MySQL network degradation causes order read and payment consistency failures
+    journey: order_cancel_rebook
+    entity: order
+    invariant: INV-ORDER-STATE-008
+    dimension: network_degradation
+    semantic_violation_type: order_mysql_network_degradation
+    injector_family: host_iptables
+    root_injection_layer: network
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [order_read_timeout, order_state_staleness]
+    expected_business_slis: [order_read_success_rate, order_read_timeout_rate, invalid_order_status_count, order_read_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: order_read_success_rate
+        direction: down
+      - metric: order_read_timeout_rate
+        direction: up
+      - metric: invalid_order_status_count
+        direction: up
+    expected_invariants: [INV-ORDER-STATE-008]
+    expected_services: [ts-order-service, ts-order-mysql, ts-payment-service]
+    cleanup_strategy: remove_iptables_degradation_and_wait_for_recovery
+    variants:
+      - id: order_mysql_latency_single
+        mode: single_point
+        root_injection_layer: network
+        target_service: ts-order-service
+        target_db: network
+        target_table: mysql_link
+        target_field: latency_ms
+        condition: dst = 'ts-order-mysql'
+        modify_value: delay_500ms
+        expected_propagation: [ts-order-service, ts-order-mysql]
+      - id: order_mysql_loss_cascade
+        mode: cascading
+        root_injection_layer: network
+        target_service: ts-order-service
+        target_db: network
+        target_table: mysql_link
+        target_field: packet_loss
+        condition: dst = 'ts-order-mysql'
+        modify_value: loss_30_percent
+        expected_propagation: [ts-order-service, ts-order-mysql, ts-payment-service]
+
+  - id: config_service_resource_degradation
+    name: Config service resource degradation creates stale configuration symptoms
+    journey: admin_manage
+    entity: config
+    invariant: INV-CONFIG-DRIFT-015
+    dimension: resource_degradation
+    semantic_violation_type: config_service_resource_exhaustion
+    injector_family: resource_limit
+    root_injection_layer: resource
+    business_effect_type: entity_distribution_shift
+    canary_status: pending_runtime_validation
+    expected_impacts: [config_lookup_timeout, stale_business_configuration]
+    expected_business_slis: [config_missing_key_count, config_out_of_range_count, config_value_distribution_jsd, trip_search_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: config_missing_key_count
+        direction: up
+      - metric: config_out_of_range_count
+        direction: up
+      - metric: config_value_distribution_jsd
+        direction: up
+    expected_invariants: [INV-CONFIG-DRIFT-015]
+    expected_services: [ts-config-service, ts-travel-service, ts-price-service]
+    cleanup_strategy: remove_resource_limit_and_wait_for_recovery
+    variants:
+      - id: config_cpu_throttle_single
+        mode: single_point
+        root_injection_layer: resource
+        target_service: ts-config-service
+        target_db: resource
+        target_table: container_limits
+        target_field: cpu_quota
+        condition: container = 'ts-config-service'
+        modify_value: cpu_quota_10_percent
+        expected_propagation: [ts-config-service, ts-travel-service]
+      - id: config_memory_pressure_cascade
+        mode: cascading
+        root_injection_layer: resource
+        target_service: ts-config-service
+        target_db: resource
+        target_table: container_limits
+        target_field: memory_limit
+        condition: container = 'ts-config-service'
+        modify_value: memory_limit_128m
+        expected_propagation: [ts-config-service, ts-travel-service, ts-price-service]
+
+  - id: payment_mysql_slow_degradation
+    name: Payment MySQL slow-query degradation causes payment consistency failures
+    journey: payment
+    entity: payment
+    invariant: INV-PAY-ORDER-001
+    dimension: network_degradation
+    semantic_violation_type: payment_mysql_slow_degradation
+    injector_family: mysql_slow
+    root_injection_layer: database
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [payment_timeout, payment_consistency_violation]
+    expected_business_slis: [payment_submit_success_rate, payment_submit_timeout_rate, payment_submit_http_5xx_rate, payment_submit_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: payment_submit_success_rate
+        direction: down
+      - metric: payment_submit_timeout_rate
+        direction: up
+      - metric: payment_submit_http_5xx_rate
+        direction: up
+    expected_invariants: [INV-PAY-ORDER-001]
+    expected_services: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+    cleanup_strategy: remove_mysql_slow_and_wait_for_recovery
+    variants:
+      - id: payment_mysql_slow_single
+        mode: single_point
+        root_injection_layer: database
+        target_service: ts-payment-service
+        target_db: ts-payment-mysql
+        target_table: payments
+        target_field: query_latency
+        condition: table = 'payments'
+        modify_value: latency_500ms
+        expected_propagation: [ts-payment-service]
+      - id: payment_mysql_slow_cascade
+        mode: cascading
+        root_injection_layer: database
+        target_service: ts-payment-service
+        target_db: ts-payment-mysql
+        target_table: payments
+        target_field: query_latency
+        condition: table = 'payments'
+        modify_value: latency_800ms
+        expected_propagation: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+
+  - id: seat_preserve_host_tc_latency
+    name: Seat-preserve path host_tc latency disrupts booking consistency
+    journey: ticket_booking
+    entity: seat
+    invariant: INV-SEAT-UNIQUE-013
+    dimension: network_degradation
+    semantic_violation_type: seat_preserve_network_latency
+    injector_family: host_tc
+    root_injection_layer: network
+    business_effect_type: cross_entity_consistency
+    canary_status: pending_runtime_validation
+    expected_impacts: [seat_preserve_timeout, booking_latency_spike]
+    expected_business_slis: [booking_precheck_success_rate, booking_precheck_timeout_rate, booking_precheck_latency_ms_p95, booking_precheck_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: booking_precheck_success_rate
+        direction: down
+      - metric: booking_precheck_timeout_rate
+        direction: up
+      - metric: booking_precheck_latency_ms_p95
+        direction: up
+    expected_invariants: [INV-SEAT-UNIQUE-013]
+    expected_services: [ts-seat-service, ts-preserve-service, ts-order-service]
+    cleanup_strategy: remove_tc_qdisc_and_wait_for_recovery
+    variants:
+      - id: seat_to_preserve_latency_single
+        mode: single_point
+        root_injection_layer: network
+        target_service: ts-seat-service
+        target_db: network
+        target_table: service_link
+        target_field: latency_ms
+        condition: dst = 'ts-preserve-service'
+        modify_value: latency_500ms
+        expected_propagation: [ts-seat-service, ts-preserve-service]
+      - id: preserve_order_seat_latency_cascade
+        mode: cascading
+        root_injection_layer: network
+        target_service: ts-preserve-service
+        target_db: network
+        target_table: service_link
+        target_field: latency_ms
+        condition: dst IN ('ts-seat-service','ts-order-service')
+        modify_value: latency_500ms
+        expected_propagation: [ts-preserve-service, ts-seat-service, ts-order-service]
+
+  - id: order_redis_cache_degradation
+    name: Order service Redis cache degradation causes stale reads and consistency failures
+    journey: order_cancel_rebook
+    entity: order
+    invariant: INV-ORDER-STATE-008
+    dimension: network_degradation
+    semantic_violation_type: order_redis_cache_degradation
+    injector_family: redis_slow
+    root_injection_layer: cache
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [order_stale_reads, order_read_timeout]
+    expected_business_slis: [order_read_success_rate, order_read_timeout_rate, order_read_latency_ms_p95, order_read_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: order_read_success_rate
+        direction: down
+      - metric: order_read_timeout_rate
+        direction: up
+      - metric: order_read_latency_ms_p95
+        direction: up
+    expected_invariants: [INV-ORDER-STATE-008]
+    expected_services: [ts-order-service, ts-payment-service]
+    cleanup_strategy: remove_redis_slow_and_wait_for_recovery
+    variants:
+      - id: order_redis_slow_single
+        mode: single_point
+        root_injection_layer: cache
+        target_service: ts-order-service
+        target_db: redis
+        target_table: cache_keys
+        target_field: command_latency
+        condition: service = 'ts-order-service'
+        modify_value: latency_300ms
+        expected_propagation: [ts-order-service]
+      - id: order_redis_slow_cascade
+        mode: cascading
+        root_injection_layer: cache
+        target_service: ts-order-service
+        target_db: redis
+        target_table: cache_keys
+        target_field: command_latency
+        condition: service = 'ts-order-service'
+        modify_value: latency_500ms
+        expected_propagation: [ts-order-service, ts-payment-service]
+
+  - id: config_service_config_modifier
+    name: Config service config_modifier creates stale configuration symptoms
+    journey: admin_manage
+    entity: config
+    invariant: INV-CONFIG-DRIFT-015
+    dimension: stale_configuration
+    semantic_violation_type: config_value_drift_modifier
+    injector_family: config_modifier
+    root_injection_layer: database
+    business_effect_type: entity_distribution_shift
+    canary_status: pending_runtime_validation
+    expected_impacts: [config_value_drift, stale_business_configuration]
+    expected_business_slis: [config_missing_key_count, config_out_of_range_count, config_value_distribution_jsd, trip_search_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: config_missing_key_count
+        direction: up
+      - metric: config_out_of_range_count
+        direction: up
+      - metric: config_value_distribution_jsd
+        direction: up
+    expected_invariants: [INV-CONFIG-DRIFT-015]
+    expected_services: [ts-config-service, ts-travel-service, ts-price-service]
+    cleanup_strategy: restore_modified_config_and_wait_for_recovery
+    variants:
+      - id: config_direct_allocation_zero_modifier_single
+        mode: single_point
+        target_service: ts-config-service
+        target_db: ts-config-mysql
+        target_table: config
+        target_field: value
+        condition: name = 'DirectTicketAllocationProportion' AND value > 0
+        modify_value: "0"
+        expected_propagation: [ts-config-service, ts-travel-service]
+      - id: config_direct_allocation_one_modifier_cascade
+        mode: cascading
+        target_service: ts-config-service
+        target_db: ts-config-mysql
+        target_table: config
+        target_field: value
+        condition: name = 'DirectTicketAllocationProportion' AND value < 1
+        modify_value: "1"
+        expected_propagation: [ts-config-service, ts-travel-service, ts-price-service]
+
+  - id: order_service_resource_degradation
+    name: Order service resource degradation causes order read/write failures
+    journey: order_cancel_rebook
+    entity: order
+    invariant: INV-ORDER-STATE-008
+    dimension: resource_degradation
+    semantic_violation_type: order_resource_exhaustion
+    injector_family: resource_limit
+    root_injection_layer: resource
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [order_timeout, order_read_failure]
+    expected_business_slis: [order_read_success_rate, order_read_timeout_rate, order_read_http_5xx_rate, order_read_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: order_read_success_rate
+        direction: down
+      - metric: order_read_timeout_rate
+        direction: up
+      - metric: order_read_http_5xx_rate
+        direction: up
+    expected_invariants: [INV-ORDER-STATE-008]
+    expected_services: [ts-order-service, ts-cancel-service, ts-rebook-service]
+    cleanup_strategy: remove_resource_limit_and_wait_for_recovery
+    variants:
+      - id: order_cpu_throttle_single
+        mode: single_point
+        root_injection_layer: resource
+        target_service: ts-order-service
+        target_db: resource
+        target_table: container_limits
+        target_field: cpu_quota
+        condition: container = 'ts-order-service'
+        modify_value: cpu_quota_10_percent
+        expected_propagation: [ts-order-service, ts-cancel-service]
+      - id: order_memory_pressure_cascade
+        mode: cascading
+        root_injection_layer: resource
+        target_service: ts-order-service
+        target_db: resource
+        target_table: container_limits
+        target_field: memory_limit
+        condition: container = 'ts-order-service'
+        modify_value: memory_limit_128m
+        expected_propagation: [ts-order-service, ts-cancel-service, ts-payment-service]
+
+  - id: travel_service_resource_degradation
+    name: Travel service resource degradation causes trip search failures
+    journey: trip_search
+    entity: trip
+    invariant: INV-TRIP-REF-007
+    dimension: resource_degradation
+    semantic_violation_type: travel_resource_exhaustion
+    injector_family: resource_limit
+    root_injection_layer: resource
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [trip_search_timeout, trip_search_failure]
+    expected_business_slis: [trip_search_success_rate, trip_search_timeout_rate, trip_search_http_5xx_rate, trip_search_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: trip_search_success_rate
+        direction: down
+      - metric: trip_search_timeout_rate
+        direction: up
+      - metric: trip_search_http_5xx_rate
+        direction: up
+    expected_invariants: [INV-TRIP-REF-007]
+    expected_services: [ts-travel-service, ts-route-service, ts-basic-service]
+    cleanup_strategy: remove_resource_limit_and_wait_for_recovery
+    variants:
+      - id: travel_cpu_throttle_single
+        mode: single_point
+        root_injection_layer: resource
+        target_service: ts-travel-service
+        target_db: resource
+        target_table: container_limits
+        target_field: cpu_quota
+        condition: container = 'ts-travel-service'
+        modify_value: cpu_quota_10_percent
+        expected_propagation: [ts-travel-service, ts-route-service]
+      - id: travel_memory_pressure_cascade
+        mode: cascading
+        root_injection_layer: resource
+        target_service: ts-travel-service
+        target_db: resource
+        target_table: container_limits
+        target_field: memory_limit
+        condition: container = 'ts-travel-service'
+        modify_value: memory_limit_128m
+        expected_propagation: [ts-travel-service, ts-route-service, ts-basic-service]
+
+  - id: preserve_service_resource_degradation
+    name: Preserve service resource degradation disrupts booking pipeline
+    journey: ticket_booking
+    entity: order
+    invariant: INV-PRESERVE-BYPASS-012
+    dimension: resource_degradation
+    semantic_violation_type: preserve_resource_exhaustion
+    injector_family: resource_limit
+    root_injection_layer: resource
+    business_effect_type: user_visible_sli
+    canary_status: pending_runtime_validation
+    expected_impacts: [preserve_timeout, booking_precheck_failure]
+    expected_business_slis: [booking_precheck_success_rate, booking_precheck_timeout_rate, booking_precheck_http_5xx_rate, booking_precheck_business_invalid_rate]
+    expected_observable_business_signals:
+      - metric: booking_precheck_success_rate
+        direction: down
+      - metric: booking_precheck_timeout_rate
+        direction: up
+      - metric: booking_precheck_http_5xx_rate
+        direction: up
+    expected_invariants: [INV-PRESERVE-BYPASS-012]
+    expected_services: [ts-preserve-service, ts-order-service, ts-seat-service]
+    cleanup_strategy: remove_resource_limit_and_wait_for_recovery
+    variants:
+      - id: preserve_cpu_throttle_single
+        mode: single_point
+        root_injection_layer: resource
+        target_service: ts-preserve-service
+        target_db: resource
+        target_table: container_limits
+        target_field: cpu_quota
+        condition: container = 'ts-preserve-service'
+        modify_value: cpu_quota_10_percent
+        expected_propagation: [ts-preserve-service, ts-order-service]
+      - id: preserve_memory_pressure_cascade
+        mode: cascading
+        root_injection_layer: resource
+        target_service: ts-preserve-service
+        target_db: resource
+        target_table: container_limits
+        target_field: memory_limit
+        condition: container = 'ts-preserve-service'
+        modify_value: memory_limit_128m
+        expected_propagation: [ts-preserve-service, ts-order-service, ts-seat-service]

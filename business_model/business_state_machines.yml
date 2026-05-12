@@ -1,0 +1,37 @@
+state_machines:
+  order_lifecycle:
+    entity: order
+    states: [CREATED, NOT_PAID, PAID, COLLECTED, CANCELLED, REBOOKED]
+    valid_transitions:
+      - [CREATED, NOT_PAID]
+      - [NOT_PAID, PAID]
+      - [PAID, COLLECTED]
+      - [NOT_PAID, CANCELLED]
+      - [PAID, CANCELLED]
+      - [PAID, REBOOKED]
+    invalid_transitions:
+      - [CANCELLED, PAID]
+      - [COLLECTED, NOT_PAID]
+      - [REBOOKED, NOT_PAID]
+  payment_lifecycle:
+    entity: payment
+    states: [CREATED, PENDING, SUCCESS, FAILED, REFUNDED]
+    valid_transitions:
+      - [CREATED, PENDING]
+      - [PENDING, SUCCESS]
+      - [PENDING, FAILED]
+      - [SUCCESS, REFUNDED]
+    invalid_transitions:
+      - [FAILED, SUCCESS]
+      - [REFUNDED, SUCCESS]
+  inventory_reservation:
+    entity: ticket_inventory
+    states: [AVAILABLE, PRESERVED, SOLD, RELEASED]
+    valid_transitions:
+      - [AVAILABLE, PRESERVED]
+      - [PRESERVED, SOLD]
+      - [PRESERVED, RELEASED]
+      - [RELEASED, AVAILABLE]
+    invalid_transitions:
+      - [SOLD, AVAILABLE]
+      - [SOLD, PRESERVED]

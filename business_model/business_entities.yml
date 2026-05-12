@@ -1,0 +1,52 @@
+entities:
+  user:
+    services: [ts-user-service, ts-auth-service]
+    key_fields: [user_id, username]
+  contact:
+    services: [ts-contacts-service]
+    key_fields: [contact_id, account_id]
+  station:
+    services: [ts-station-service]
+    key_fields: [station_id, name]
+  route:
+    services: [ts-route-service]
+    key_fields: [route_id, stations]
+  train:
+    services: [ts-train-service]
+    key_fields: [train_type, train_number]
+  trip:
+    services: [ts-travel-service, ts-travel2-service]
+    key_fields: [trip_id, route_id, train_type]
+  seat:
+    services: [ts-seat-service]
+    key_fields: [trip_id, seat_type]
+  ticket_inventory:
+    services: [ts-seat-service, ts-preserve-service]
+    key_fields: [trip_id, seat_type, date]
+  order:
+    services: [ts-order-service, ts-order-other-service]
+    key_fields: [order_id, account_id, status]
+  payment:
+    services: [ts-payment-service, ts-inside-payment-service]
+    key_fields: [payment_id, order_id, status, amount]
+  assurance:
+    services: [ts-assurance-service]
+    key_fields: [assurance_id, order_id]
+  consign:
+    services: [ts-consign-service, ts-consign-price-service]
+    key_fields: [consign_id, order_id]
+  food_order:
+    services: [ts-food-service, ts-food-delivery-service, ts-station-food-service, ts-train-food-service]
+    key_fields: [food_order_id, order_id]
+  consign_record:
+    services: [ts-consign-service, ts-consign-price-service]
+    key_fields: [consign_record_id, order_id]
+  notification:
+    services: [ts-notification-service]
+    key_fields: [notification_id, order_id]
+  config:
+    services: [ts-config-service]
+    key_fields: [name, value]
+  wait_order:
+    services: [ts-wait-order-service]
+    key_fields: [id, account_id, train_number, status]

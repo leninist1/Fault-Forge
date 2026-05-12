@@ -1,0 +1,22 @@
+injectors:
+  database_modifier:
+    enabled: true
+    semantic_faults: [data_consistency, state_transition, amount_or_price_drift, partial_workflow_commit]
+    cleanup_required: true
+  resource_limit:
+    enabled: true
+    semantic_faults: [infra_business_impact]
+    cleanup_required: true
+  host_iptables:
+    enabled: true
+    semantic_faults: [infra_business_impact]
+    cleanup_required: true
+  config_modifier:
+    enabled: false
+    quarantine_reason: low_yield_for_ase_nier_gold_profile
+  host_tc:
+    enabled: false
+    quarantine_reason: low_yield_for_ase_nier_gold_profile
+  docker_exec:
+    enabled: false
+    quarantine_reason: low_yield_for_ase_nier_gold_profile

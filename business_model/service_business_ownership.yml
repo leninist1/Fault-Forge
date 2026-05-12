@@ -1,0 +1,126 @@
+services:
+  ts-auth-service:
+    entities: [user]
+    database: ts-auth-mysql
+    tables: [users]
+  ts-user-service:
+    entities: [user]
+    database: ts-user-mysql
+    tables: [users]
+  ts-contacts-service:
+    entities: [contact]
+    database: ts-contacts-mysql
+    tables: [contacts]
+  ts-station-service:
+    entities: [station]
+    database: ts-station-mysql
+    tables: [stations]
+  ts-route-service:
+    entities: [route]
+    database: ts-route-mysql
+    tables: [routes]
+  ts-train-service:
+    entities: [train]
+    database: ts-train-mysql
+    tables: [trains]
+  ts-travel-service:
+    entities: [trip]
+    database: ts-travel-mysql
+    tables: [trips]
+  ts-travel2-service:
+    entities: [trip]
+    database: ts-travel2-mysql
+    tables: [trips]
+  ts-seat-service:
+    entities: [seat, ticket_inventory]
+    database: ts-seat-mysql
+    tables: [seat_inventory, sold_tickets]
+  ts-preserve-service:
+    entities: [order, ticket_inventory]
+    database: ts-preserve-mysql
+    tables: [preserve_orders]
+  ts-order-service:
+    entities: [order]
+    database: ts-order-mysql
+    tables: [orders]
+  ts-order-other-service:
+    entities: [order]
+    database: ts-order-other-mysql
+    tables: [orders]
+  ts-payment-service:
+    entities: [payment]
+    database: ts-payment-mysql
+    tables: [payments]
+  ts-inside-payment-service:
+    entities: [payment]
+    database: ts-inside-payment-mysql
+    tables: [inside_payments]
+  ts-cancel-service:
+    entities: [order, ticket_inventory]
+    database: ts-cancel-mysql
+    tables: [cancel_records]
+  ts-rebook-service:
+    entities: [order]
+    database: ts-rebook-mysql
+    tables: [rebook_records]
+  ts-price-service:
+    entities: [order, trip]
+    database: ts-price-mysql
+    tables: [price_config]
+  ts-basic-service:
+    entities: [station, route, train]
+    database: ts-basic-mysql
+    tables: [price_config, route_config]
+  ts-assurance-service:
+    entities: [assurance]
+    database: ts-assurance-mysql
+    tables: [assurance_orders]
+  ts-consign-service:
+    entities: [consign]
+    database: ts-consign-mysql
+    tables: [consign_orders]
+  ts-consign-price-service:
+    entities: [consign]
+    database: ts-consign-price-mysql
+    tables: [consign_prices]
+  ts-food-service:
+    entities: [food_order]
+    database: ts-food-mysql
+    tables: [food_order]
+  ts-food-delivery-service:
+    entities: [food_order]
+    database: ts-food-delivery-mysql
+    tables: [food_delivery_order]
+  ts-station-food-service:
+    entities: [food_order]
+    database: ts-station-food-mysql
+    tables: [station_food]
+  ts-train-food-service:
+    entities: [food_order]
+    database: ts-train-food-mysql
+    tables: [train_food]
+  ts-notification-service:
+    entities: [notification]
+    database: ts-notification-mysql
+    tables: [notify_info]
+  ts-config-service:
+    entities: [config]
+    database: ts-config-mysql
+    tables: [config]
+  ts-security-service:
+    entities: [config]
+    database: ts-security-mysql
+    tables: [security_config]
+  ts-voucher-service:
+    entities: [order]
+    database: ts-voucher-mysql
+    tables: [voucher]
+  ts-delivery-service:
+    entities: [food_order]
+    database: ts-delivery-mysql
+    tables: [delivery]
+  ts-wait-order-service:
+    entities: [wait_order]
+    database: ts-wait-order-mysql
+    tables: [wait_list_order]
+

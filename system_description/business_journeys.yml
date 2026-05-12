@@ -1,0 +1,729 @@
+# Train-Ticket Business Journeys & Entities & Invariants
+#
+# This file is the core input to the FaultForge FSE (Fault Space Explorer).
+# It captures the *business semantics* that technical topology alone cannot express,
+# and is the oracle basis for PRISM axis B (Invariant Violation) and BIFI's business
+# fault injection.
+#
+# Sources:
+#   - Code analysis of ts-preserve-service, ts-order-service, ts-cancel-service,
+#     ts-rebook-service, ts-inside-payment-service, ts-seat-service, ts-price-service
+#   - Carbon Health Incident Study (arxiv:2505.09813) fault categories
+#   - Rethinking RCA (arxiv:2510.04711) Type I/II/III faults
+#
+# Schema version: 1.0
+
+schema_version: "1.0"
+system: train-ticket
+
+# ============================================================================
+# Section 1: Business Journeys (用户端到端旅程)
+# ============================================================================
+business_journeys:
+
+  - name: booking
+    description: "用户从搜索车次到完成支付的全流程预订"
+    criticality: critical
+    stages:
+      - name: search_trips
+        calls: [ts-travel-service, ts-travel2-service, ts-station-service, ts-basic-service]
+        entry: "POST /api/v1/travelservice/trips"
+      - name: select_train_and_price
+        calls: [ts-travel-service, ts-price-service, ts-seat-service, ts-train-service]
+        entry: "GET /api/v1/travelservice/trip_detail"
+      - name: fill_passenger_info
+        calls: [ts-contacts-service, ts-user-service, ts-assurance-service]
+        entry: "GET /api/v1/contactservice/contacts"
+      - name: preserve
+        calls: [ts-preserve-service, ts-security-service, ts-seat-service, ts-order-service, ts-contacts-service]
+        entry: "POST /api/v1/preserveservice/preserve"
+      - name: payment
+        calls: [ts-inside-payment-service, ts-payment-service, ts-order-service]
+        entry: "POST /api/v1/inside_pay_service/inside_payment"
+    business_entities: [trip, price, seat, contact, order, payment, assurance]
+    invariants: [BK-1, BK-2, BK-3, BK-4, BK-5, BK-6, BK-7]
+    sli_affected: [booking_success_rate, order_price_correctness, seat_uniqueness]
+
+  - name: cancel
+    description: "用户取消已支付订单并退款"
+    criticality: high
+    stages:
+      - name: query_order
+        calls: [ts-cancel-service, ts-order-service]
+      - name: cancel_and_refund
+        calls: [ts-cancel-service, ts-order-service, ts-inside-payment-service]
+    business_entities: [order, payment, refund]
+    invariants: [CN-1, CN-2, CN-3]
+    sli_affected: [cancel_success_rate, refund_amount_correctness]
+
+  - name: rebook
+    description: "用户改签车票（退旧票+订新票+补差价/退款）"
+    criticality: high
+    stages:
+      - name: select_new_trip
+        calls: [ts-rebook-service, ts-travel-service, ts-seat-service]
+      - name: compute_price_diff
+        calls: [ts-rebook-service, ts-price-service]
+      - name: execute_rebook
+        calls: [ts-rebook-service, ts-order-service, ts-seat-service, ts-inside-payment-service]
+    business_entities: [order, seat, price, payment]
+    invariants: [RB-1, RB-2, RB-3]
+    sli_affected: [rebook_success_rate, price_diff_correctness]
+
+  - name: execute_ticket
+    description: "用户取/用票，订单状态流转"
+    criticality: medium
+    stages:
+      - name: collect_ticket
+        calls: [ts-execute-service, ts-order-service]
+    business_entities: [order]
+    invariants: [EX-1, EX-2]
+    sli_affected: [ticket_usage_success_rate]
+
+  - name: admin_manage
+    description: "管理员 CRUD 基础数据（站点/车次/价格/路线）"
+    criticality: medium
+    stages:
+      - name: crud_basic
+        calls: [ts-admin-basic-info-service, ts-station-service, ts-train-service, ts-route-service, ts-price-service, ts-config-service]
+    business_entities: [station, train, route, price, config]
+    invariants: [AD-1, AD-2, AD-3]
+    sli_affected: [config_consistency_rate]
+
+# ============================================================================
+# Section 2: Business Entities (核心业务实体)
+# ============================================================================
+business_entities:
+
+  - name: trip
+    owner_service: ts-travel-service  # and ts-travel2-service
+    storage:
+      db: ts-travel-mysql
+      table: trips
+    key_fields: [tripId, trainTypeName, routeId, startingStationId, terminalStationId]
+    referenced_by: [ts-basic-service, ts-preserve-service, ts-seat-service, ts-rebook-service, ts-food-service]
+    local_invariants:
+      - "trip.startingStationId != trip.terminalStationId"
+      - "trip.routeId exists in route-service"
+
+  - name: price
+    owner_service: ts-price-service
+    storage:
+      db: ts-price-mysql
+      table: prices
+    key_fields: [id, trainType, routeId, basicPriceRate, firstClassPriceRate]
+    referenced_by: [ts-basic-service, ts-order-service, ts-rebook-service, ts-travel-service]
+    local_invariants:
+      - "price.basicPriceRate > 0"
+      - "price.firstClassPriceRate >= price.basicPriceRate"
+
+  - name: seat
+    owner_service: ts-seat-service
+    storage: {computed: true}
+    key_fields: [trainNumber, travelDate, seatClass, seatNumber]
+    referenced_by: [ts-preserve-service, ts-rebook-service, ts-order-service]
+    local_invariants:
+      - "reserved_seats(train, date) <= train.capacity"
+      - "no seat assigned to more than one active order"
+
+  - name: contact
+    owner_service: ts-contacts-service
+    storage:
+      db: ts-contacts-mysql
+      table: contacts
+    key_fields: [id, accountId, name, documentNumber, documentType]
+    referenced_by: [ts-preserve-service, ts-order-service]
+
+  - name: order
+    owner_service: ts-order-service  # and ts-order-other-service for Z/K
+    storage:
+      db: ts-order-mysql
+      table: orders
+    key_fields: [id, accountId, trainNumber, travelDate, seatClass, price, status]
+    referenced_by: [ts-cancel-service, ts-rebook-service, ts-inside-payment-service, ts-execute-service, ts-security-service, ts-seat-service]
+    state_machine:
+      states: [NOT_PAID, PAID, COLLECTED, USED, CHANGE, CANCEL, REFUNDED]
+      initial: NOT_PAID
+      transitions:
+        - {from: NOT_PAID, to: PAID,     trigger: inside_payment_success}
+        - {from: NOT_PAID, to: CANCEL,   trigger: user_cancel_or_timeout}
+        - {from: PAID,     to: COLLECTED,trigger: execute_collect}
+        - {from: PAID,     to: CANCEL,   trigger: user_cancel}
+        - {from: PAID,     to: CHANGE,   trigger: rebook_issued}
+        - {from: COLLECTED,to: USED,     trigger: enter_station}
+        - {from: CANCEL,   to: REFUNDED, trigger: refund_settled}
+        - {from: CHANGE,   to: REFUNDED, trigger: rebook_refund_settled}
+    local_invariants:
+      - "order.price > 0"
+      - "order.status transitions must be in state_machine.transitions"
+
+  - name: payment
+    owner_service: ts-inside-payment-service
+    storage:
+      db: ts-inside-payment-mysql
+      table: inside_payment
+    key_fields: [id, orderId, userId, price, type]
+    referenced_by: [ts-cancel-service, ts-rebook-service]
+    local_invariants:
+      - "payment.price > 0"
+      - "payment.orderId must exist in order-service"
+
+  - name: refund
+    owner_service: ts-inside-payment-service
+    storage:
+      db: ts-inside-payment-mysql
+      table: refunds
+
+  - name: station
+    owner_service: ts-station-service
+    storage: {db: ts-station-mysql, table: stations}
+    key_fields: [id, name, stayTime]
+    referenced_by: [ts-basic-service, ts-route-service, ts-travel-service, ts-admin-route-service]
+
+  - name: train
+    owner_service: ts-train-service
+    storage: {db: ts-train-mysql, table: train_type}
+    key_fields: [id, name, economyClass, confortClass, averageSpeed]
+    local_invariants:
+      - "train.economyClass + train.confortClass == train.totalSeats"
+
+  - name: route
+    owner_service: ts-route-service
+    storage: {db: ts-route-mysql, table: routes}
+    key_fields: [id, startStationId, terminalStationId, stations, distances]
+    local_invariants:
+      - "len(route.stations) == len(route.distances) + 1"
+      - "route.stations[0] == route.startStationId"
+      - "route.stations[-1] == route.terminalStationId"
+      - "route.distances are monotonically increasing"
+
+  - name: config
+    owner_service: ts-config-service
+    storage: {db: ts-config-mysql, table: config}
+    key_fields: [name, value, description]
+    referenced_by: [ts-seat-service, ts-preserve-service, ts-cancel-service]
+
+  - name: assurance
+    owner_service: ts-assurance-service
+
+# ============================================================================
+# Section 3: Business Invariants (业务不变式 — PRISM Axis B Oracles)
+# Each invariant has:
+#   - id: unique identifier
+#   - description: natural language
+#   - formal: pseudo-formal expression
+#   - oracle_kind: sql | http_assert | journey_trace | computed
+#   - severity: how bad a violation is
+#   - related_entities / related_services
+# ============================================================================
+business_invariants:
+
+  # ---------- Booking journey ----------
+  # NOTE: Live Train-Ticket schema observed 2026-04. Tables use snake_case.
+  # Order states are int: 0=NOT_PAID, 1=PAID, 2=COLLECTED, 3=CHANGE, 4=CANCEL,
+  #                        5=USED, 6=REFUNDED
+
+  - id: BK-1
+    description: "订单价格必须为正"
+    formal: "∀ order o: o.price > 0 ∧ order.price is numeric"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, price, contacts_name
+        FROM orders
+        WHERE price IS NULL
+           OR CAST(price AS DECIMAL(20,4)) <= 0
+    severity: critical
+    related_entities: [order]
+    related_services: [ts-order-service]
+
+  - id: BK-2
+    description: "同一车次、同一日期的座位号不能被多个活跃订单占用"
+    formal: "∀ (train,date,seat): |{o ∈ orders : o.status ∈ {PAID, COLLECTED, USED}}| ≤ 1"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT train_number, travel_date, seat_class, seat_number, COUNT(*) AS cnt
+        FROM orders
+        WHERE status IN (1, 2, 5)
+        GROUP BY train_number, travel_date, seat_class, seat_number
+        HAVING cnt > 1
+    severity: critical
+    related_entities: [order, seat]
+
+  - id: BK-3
+    description: "订单状态码必须在合法枚举范围内 (0..6)"
+    formal: "∀ order o: o.status ∈ {0,1,2,3,4,5,6}"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, status FROM orders
+        WHERE status IS NULL OR status < 0 OR status > 6
+    severity: critical
+    related_entities: [order]
+
+  - id: BK-4
+    description: "搜索/展示时的票价必须与下单时记录的票价一致"
+    formal: "∀ journey j: j.displayed_price = j.booked_price"
+    oracle_kind: journey_trace
+    oracle:
+      tracer: business_observatory.journey_tracer
+      field_compare: [displayed_price, ordered_price]
+    severity: critical
+    related_entities: [trip, price, order]
+
+  - id: BK-5
+    description: "订单的乘客姓名和证件号必须均非空"
+    formal: "∀ order o: o.contacts_name ≠ ∅ ∧ o.contacts_document_number ≠ ∅"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, contacts_name, contacts_document_number
+        FROM orders
+        WHERE contacts_name IS NULL OR contacts_name = ''
+           OR contacts_document_number IS NULL OR contacts_document_number = ''
+    severity: high
+    related_entities: [order, contact]
+
+  - id: BK-6
+    description: "订单的起始站与终点站必须不同"
+    formal: "∀ order o: o.from_station ≠ o.to_station ∧ both non-empty"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, from_station, to_station
+        FROM orders
+        WHERE from_station IS NULL OR to_station IS NULL
+           OR from_station = '' OR to_station = ''
+           OR from_station = to_station
+    severity: high
+    related_entities: [order]
+
+  - id: BK-7
+    description: "价格配置基础倍率必须 ∈ (0, 5]"
+    formal: "∀ price p: 0 < p.basic_price_rate ≤ 5 ∧ 0 < p.first_class_price_rate ≤ 10"
+    oracle_kind: sql
+    oracle:
+      db: ts-price-mysql
+      query: |
+        SELECT id, basic_price_rate, first_class_price_rate, train_type
+        FROM price_config
+        WHERE basic_price_rate IS NULL OR basic_price_rate <= 0 OR basic_price_rate > 5
+           OR first_class_price_rate IS NULL OR first_class_price_rate <= 0 OR first_class_price_rate > 10
+    severity: high
+    related_entities: [price]
+
+  # ---------- ASE NIER business-semantic invariant aliases ----------
+  - id: INV-PAY-ORDER-001
+    description: "已提交的支付记录必须引用存在的订单"
+    formal: "∀ payment p: p.order_id exists in order-service.orders"
+    oracle_kind: computed
+    oracle:
+      rule: "compare payment.order_id against order-service visible order ids"
+    severity: critical
+    related_entities: [payment, order]
+    related_services: [ts-payment-service, ts-order-service]
+
+  - id: INV-PAY-AMOUNT-002
+    description: "支付金额必须为正且应与订单金额一致"
+    formal: "∀ payment p: p.payment_price > 0 ∧ p.payment_price = order(p.order_id).price"
+    oracle_kind: computed
+    oracle:
+      rule: "compare payment.payment_price against order.price and enforce positivity"
+    severity: critical
+    related_entities: [payment, order]
+    related_services: [ts-payment-service, ts-order-service, ts-inside-payment-service]
+
+  - id: INV-BOOK-INV-004
+    description: "预订链路中订单状态与座位分配必须一致"
+    formal: "active订单(status∈{PAID,COLLECTED,USED})必须有seat_number，未支付订单(status=NOT_PAID)不应占座"
+    oracle_kind: computed
+    oracle:
+      rule: "check order.status and order.seat_number coherence in ts-order-mysql.orders"
+    severity: critical
+    related_entities: [order, seat]
+    related_services: [ts-preserve-service, ts-seat-service, ts-order-service]
+
+  - id: INV-CONTACT-OWN-006
+    description: "订单使用的联系人必须归属于下单账号"
+    formal: "∀ booking/order o: contact(o.contacts_id).account_id = o.account_id"
+    oracle_kind: computed
+    oracle:
+      rule: "compare contacts.account_id with booking/order account context"
+    severity: high
+    related_entities: [contact, order]
+    related_services: [ts-contacts-service, ts-preserve-service, ts-order-service]
+
+  - id: INV-TRIP-REF-007
+    description: "行程与线路/站点引用必须有效"
+    formal: "∀ trip t: t.route_id exists ∧ route.start_station/end_station exist in station set"
+    oracle_kind: computed
+    oracle:
+      rule: "check trip.route_id -> route.id and route station names -> station.name"
+    severity: high
+    related_entities: [trip, route, station]
+    related_services: [ts-travel-service, ts-route-service, ts-station-service]
+
+  - id: INV-ADDON-ORDER-011
+    description: "附加服务订单必须引用存在的主订单"
+    formal: "∀ addon a: a.order_id exists in order-service.orders"
+    oracle_kind: computed
+    oracle:
+      rule: "compare assurance/consign/food addon order_id against order-service order ids"
+    severity: high
+    related_entities: [assurance, consign, food_order, order]
+    related_services: [ts-assurance-service, ts-consign-service, ts-food-delivery-service, ts-order-service]
+
+  - id: INV-PRICE-ORDER-003
+    description: "订单价格必须匹配 ts-price-service 中的已配置票价"
+    formal: "∀ order o: o.price matches price_service.configured_price(o.train_number, o.seat_class)"
+    oracle_kind: computed
+    oracle:
+      rule: "compare order price against ts-price-mysql.prices basicPriceRate times base_price"
+    severity: critical
+    related_entities: [order, price]
+    related_services: [ts-order-service, ts-price-service, ts-basic-service]
+
+  - id: INV-PRESERVE-BYPASS-012
+    description: "预订成功的订单必须有非空乘客姓名且出发站不等于到达站"
+    formal: "∀ order o with status IN (1,2): o.contacts_name IS NOT NULL AND o.contacts_name <> '' AND o.from <> o.to"
+    oracle_kind: computed
+    oracle:
+      rule: "check orders.contacts_name non-empty and from != to for active orders"
+    severity: critical
+    related_entities: [order, contact]
+    related_services: [ts-preserve-service, ts-order-service, ts-contacts-service]
+
+  - id: INV-SEAT-UNIQUE-013
+    description: "同一车次同一日期的座位不可分配给多个活跃订单"
+    formal: "∀ orders o1, o2: o1.train_number = o2.train_number AND o1.seat_number = o2.seat_number AND o1.status IN (1,2) AND o2.status IN (1,2) ⟹ o1.id = o2.id"
+    oracle_kind: computed
+    oracle:
+      rule: "check no two active orders on same train share the same seat_number"
+    severity: critical
+    related_entities: [order, seat]
+    related_services: [ts-seat-service, ts-preserve-service, ts-order-service]
+
+  - id: INV-NOTIFY-ORDER-014
+    description: "通知记录必须引用存在的订单"
+    formal: "∀ notify n: n.order_number exists in order-service.orders"
+    oracle_kind: computed
+    oracle:
+      rule: "compare notify_info.order_number against order-service order ids"
+    severity: high
+    related_entities: [notification, order]
+    related_services: [ts-notification-service, ts-order-service]
+
+  - id: INV-CONFIG-DRIFT-015
+    description: "配置项的值必须在有效范围内"
+    formal: "∀ config c: c.name=DirectTicketAllocationProportion ⟹ 0 < c.value < 1"
+    oracle_kind: computed
+    oracle:
+      rule: "check config.value in (0,1) for allocation proportion"
+    severity: high
+    related_entities: [config]
+    related_services: [ts-config-service, ts-travel-service, ts-price-service]
+
+  - id: INV-SECURITY-BYPASS-016
+    description: "安全阈值配置必须为正数"
+    formal: "∀ sec_config s: s.value > 0"
+    oracle_kind: computed
+    oracle:
+      rule: "check security_config.value > 0 for all rows"
+    severity: critical
+    related_entities: [config]
+    related_services: [ts-security-service, ts-preserve-service]
+
+  - id: INV-VOUCHER-ORDER-017
+    description: "凭证订单号必须引用存在的订单"
+    formal: "∀ voucher v: v.order_id exists in order-service.orders"
+    oracle_kind: computed
+    oracle:
+      rule: "compare voucher.order_id against order-service order ids"
+    severity: high
+    related_entities: [order]
+    related_services: [ts-voucher-service, ts-order-service]
+
+  - id: INV-DELIVERY-ORDER-018
+    description: "配送记录必须引用存在的订单"
+    formal: "∀ delivery d: d.order_id IS NULL OR d.order_id exists in order-service.orders"
+    oracle_kind: computed
+    oracle:
+      rule: "compare delivery.order_id against order-service order ids when non-null"
+    severity: medium
+    related_entities: [food_order, order]
+    related_services: [ts-delivery-service, ts-order-service]
+
+  - id: INV-TRAIN-TYPE-019
+    description: "列车类型的运力和速度必须为正数"
+    formal: "∀ train_type t: t.economy_class > 0 AND t.confort_class > 0 AND t.average_speed > 0"
+    oracle_kind: computed
+    oracle:
+      rule: "check train_type capacity and speed values > 0"
+    severity: high
+    related_entities: [train]
+    related_services: [ts-train-service, ts-travel-service]
+
+  - id: INV-INSIDE-PAY-020
+    description: "内部支付金额和钱包余额必须有效"
+    formal: "∀ inside_payment ip: ip.price > 0; ∀ inside_money m: m.money >= 0"
+    oracle_kind: computed
+    oracle:
+      rule: "check inside_payment price positivity and inside_money balance non-negativity"
+    severity: critical
+    related_entities: [payment]
+    related_services: [ts-inside-payment-service, ts-order-service]
+
+  - id: INV-WAIT-STATE-021
+    description: "候补订单状态转换必须合法"
+    formal: "∀ wait_order w: w.status = COLLECTED(2) OR w.status = REFUNDS(4) ⟹ w.price > 0; w.status = PAID(1) ⟹ w.price > 0"
+    oracle_kind: computed
+    oracle:
+      rule: "check wait_list_order status legality and price/status consistency"
+    severity: high
+    related_entities: [wait_order]
+    related_services: [ts-wait-order-service]
+
+  - id: INV-FOOD-ORDER-022
+    description: "Food order price must be positive and delivery trip_id must be valid"
+    formal: "∀ food_order f: f.price > 0; ∀ food_delivery d: d.trip_id IS NOT NULL"
+    oracle_kind: computed
+    oracle:
+      rule: "check food_order.price positivity and delivery_order.trip_id non-null"
+    severity: high
+    related_entities: [food_order, order]
+    related_services: [ts-food-service, ts-food-delivery-service, ts-order-service]
+
+  - id: INV-CONSIGN-PRICE-023
+    description: "Consign record price and weight must be positive"
+    formal: "∀ consign_record c: c.consign_record_price > 0 ∧ c.weight > 0"
+    oracle_kind: computed
+    oracle:
+      rule: "check consign_record_price and weight positivity"
+    severity: high
+    related_entities: [consign_record, order]
+    related_services: [ts-consign-service, ts-consign-price-service]
+
+  # ---------- Cancel journey ----------
+  - id: CN-1
+    description: "处于 CANCEL 状态的订单其价格字段必须保持，供后续退款核对"
+    formal: "∀ order o: o.status = CANCEL(4) ⟹ o.price IS NOT NULL"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, status, price FROM orders
+        WHERE status = 4 AND (price IS NULL OR price = '' OR price = '0')
+    severity: critical
+    related_entities: [order]
+
+  - id: CN-2
+    description: "退款金额应符合退票规则（距开车时间决定退款比例）"
+    formal: "refund.amount = order.price × refund_rate(distance_to_departure)"
+    oracle_kind: computed
+    oracle:
+      rule: |
+        refund_rate = 1.0 if hours_to_departure >= 24
+                   else 0.8 if hours_to_departure >= 2
+                   else 0.5
+    severity: high
+    related_entities: [order, refund]
+
+  - id: CN-3
+    description: "不可能存在同时为 REFUNDED 与活跃 (PAID/COLLECTED) 的订单 id"
+    formal: "status(o)=REFUNDED ⟹ ¬∃ paid row for same id"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT a.id FROM orders a JOIN orders b ON a.id = b.id
+        WHERE a.status = 6 AND b.status IN (1,2)
+    severity: high
+    related_entities: [seat, order]
+
+  # ---------- Rebook journey ----------
+  - id: RB-1
+    description: "CHANGE 状态的订单必须保留原价格和车次信息"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, status, price, train_number FROM orders
+        WHERE status = 3 AND (price IS NULL OR train_number IS NULL OR train_number = '')
+    severity: critical
+    related_entities: [order]
+
+  - id: RB-2
+    description: "改签差价支付金额 = 新票价 - 旧票价 (若为正)，或退款 = 旧票价 - 新票价 (若为负)"
+    oracle_kind: computed
+    severity: high
+    related_entities: [order, payment]
+
+  - id: RB-3
+    description: "CHANGE 状态订单的座位号必须保持合法"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, status, seat_number FROM orders
+        WHERE status = 3 AND (seat_number IS NULL OR seat_number = '')
+    severity: high
+    related_entities: [seat, order]
+
+  # ---------- Execute journey ----------
+  - id: EX-1
+    description: "USED 状态的订单必定来自已 PAID 的订单（price 非空代表历史被 PAID 过）"
+    oracle_kind: sql
+    oracle:
+      db: ts-order-mysql
+      query: |
+        SELECT id, status, price FROM orders
+        WHERE status = 5 AND (price IS NULL OR price = '0' OR price = '')
+    severity: high
+    related_entities: [order]
+
+  - id: EX-2
+    description: "取票时间必须早于列车开车时间（declarative only — 无 live oracle）"
+    oracle_kind: computed
+    severity: medium
+    related_entities: [order, trip]
+
+  # ---------- Admin journey ----------
+  - id: AD-1
+    description: "路线的站点列表必须非空 (len(stations) ≥ 2)"
+    oracle_kind: sql
+    oracle:
+      db: ts-route-mysql
+      query: |
+        SELECT r.id
+        FROM route r
+        LEFT JOIN (
+          SELECT route_id, COUNT(*) AS n FROM route_stations GROUP BY route_id
+        ) c ON r.id = c.route_id
+        WHERE c.n IS NULL OR c.n < 2
+    severity: high
+    related_entities: [route, station, trip]
+
+  - id: AD-2
+    description: "路线的站点数与距离记录数对齐 (distances = stations - 1)"
+    oracle_kind: sql
+    oracle:
+      db: ts-route-mysql
+      query: |
+        SELECT s.route_id, s.n_stations, d.n_distances
+        FROM (SELECT route_id, COUNT(*) AS n_stations FROM route_stations GROUP BY route_id) s
+        LEFT JOIN (SELECT route_id, COUNT(*) AS n_distances FROM route_distances GROUP BY route_id) d
+          ON s.route_id = d.route_id
+        WHERE d.n_distances IS NULL OR d.n_distances != s.n_stations - 1
+    severity: medium
+    related_entities: [route]
+
+  - id: AD-3
+    description: "每个路线必须在 route 表中有明确的 start_station 和 end_station"
+    oracle_kind: sql
+    oracle:
+      db: ts-route-mysql
+      query: |
+        SELECT id, start_station, end_station FROM route
+        WHERE start_station IS NULL OR end_station IS NULL
+           OR start_station = '' OR end_station = ''
+           OR start_station = end_station
+    severity: high
+    related_entities: [route]
+
+# ============================================================================
+# Section 4: Business SLIs (用户可感知的服务级指标 — PRISM Axis D)
+# ============================================================================
+business_slis:
+
+  - name: booking_success_rate
+    description: "预订旅程完成率"
+    formula: "count(journeys where stage=payment AND status=SUCCESS) / count(journeys initiated)"
+    target: 0.95
+    measurement: business_observatory.journey_tracer
+    affected_by: [BK-1, BK-2, BK-5, BK-6]
+
+  - name: order_price_correctness
+    description: "订单价格与搜索/展示价格一致的比例"
+    formula: "count(orders where order.price == displayed_price) / count(orders)"
+    target: 1.0
+    measurement: post_hoc_consistency_check
+    affected_by: [BK-4, BK-7]
+
+  - name: seat_uniqueness
+    description: "座位未被多次占用的比例"
+    formula: "1 - count(double_bookings) / count(orders)"
+    target: 1.0
+    measurement: sql_scan
+    affected_by: [BK-2]
+
+  - name: order_state_legality
+    description: "状态转移合法比例"
+    formula: "count(orders with legal transitions) / count(orders)"
+    target: 1.0
+    measurement: sql_scan
+    affected_by: [BK-3]
+
+  - name: cancel_success_rate
+    description: "取消请求成功率"
+    formula: "count(cancel where result=SUCCESS) / count(cancel initiated)"
+    target: 0.99
+    affected_by: [CN-1, CN-3]
+
+  - name: refund_amount_correctness
+    description: "退款金额正确比例"
+    formula: "count(refunds where amount == expected_amount) / count(refunds)"
+    target: 1.0
+    affected_by: [CN-2]
+
+  - name: rebook_success_rate
+    formula: "count(rebook where result=SUCCESS) / count(rebook initiated)"
+    target: 0.95
+    affected_by: [RB-1, RB-2, RB-3]
+
+  - name: config_consistency_rate
+    description: "管理员配置更新后多服务视图一致的比例"
+    formula: "count(checks where all_services_agree) / count(checks)"
+    target: 1.0
+    affected_by: [AD-1, AD-2]
+
+# ============================================================================
+# Section 5: Hidden Dependencies (隐性依赖 — FSE Stage 1 补充)
+# 传统拓扑图看不见的依赖，容易成为故障盲点
+# ============================================================================
+hidden_dependencies:
+
+  - name: price_config_sync
+    description: "价格配置表在多服务间存在读副本/缓存，修改后存在同步窗口"
+    involved: [ts-price-service, ts-travel-service, ts-order-service]
+    failure_mode: price_drift_during_sync_window
+
+  - name: seat_allocation_contention
+    description: "多个 preserve 请求同时下单同一车次座位，依赖 seat-service 无锁设计"
+    involved: [ts-seat-service, ts-preserve-service, ts-preserve-other-service]
+    failure_mode: double_booking_under_concurrency
+
+  - name: order_service_split
+    description: "G/D 车次和 Z/K 车次使用不同的 order-service 实例和数据库"
+    involved: [ts-order-service, ts-order-other-service]
+    failure_mode: cross_instance_inconsistency_when_rebook_changes_train_type
+
+  - name: payment_refund_saga
+    description: "取消/改签的退款流程是 order-service + inside-payment-service + payment-service 的跨服务事务，无强一致性保障"
+    involved: [ts-order-service, ts-inside-payment-service, ts-payment-service]
+    failure_mode: partial_refund_leaving_inconsistent_state
+
+  - name: station_name_id_dual_form
+    description: "部分接口传站点名称，部分传 ID，两侧转换依赖 station-service"
+    involved: [ts-station-service, ts-travel-service, ts-route-service, ts-basic-service]
+    failure_mode: station_lookup_failure_causes_cascade
+
+  - name: time_zone_assumption
+    description: "多个服务假设 JVM 时区一致，但容器时区由镜像 + 环境变量决定"
+    involved: [ts-order-service, ts-travel-service, ts-preserve-service]
+    failure_mode: timezone_drift_causes_wrong_date_logic
